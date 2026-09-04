@@ -24,6 +24,9 @@ import {
   WorktreeError,
 } from "./types.ts";
 
+// Replaced only by the standalone build. Source and JS bundles use Bun directly.
+declare const WT_STANDALONE: boolean;
+
 export class Manager {
   readonly store: Store;
   constructor(readonly repo: Repository) {
@@ -153,14 +156,19 @@ export class Manager {
       const logPath = join(directory, "server.log");
       await writeJson(specPath, spec);
       const output = await open(logPath, "a", 0o600);
-      const supervisor = fileURLToPath(
-        new URL(
-          import.meta.url.endsWith(".ts") ? "./supervisor.ts" : "./supervisor.js",
-          import.meta.url,
-        ),
-      );
-      const child = spawn(process.execPath, [supervisor, specPath], {
-        cwd: dirname(supervisor),
+      const standalone = typeof WT_STANDALONE !== "undefined" && WT_STANDALONE;
+      const supervisor = standalone
+        ? process.execPath
+        : fileURLToPath(
+            new URL(
+              import.meta.url.endsWith(".ts") ? "./supervisor.ts" : "./supervisor.js",
+              import.meta.url,
+            ),
+          );
+      const args = standalone ? ["--internal-supervisor", specPath] : [supervisor, specPath];
+      const child = spawn(process.execPath, args, {
+        // Embedded Bun filesystem paths cannot be used as a process cwd.
+        cwd: standalone ? tree.path : dirname(supervisor),
         detached: true,
         stdio: ["ignore", output.fd, output.fd],
         env: { ...process.env, ...(port === undefined ? {} : { PORT: String(port) }) },

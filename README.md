@@ -39,6 +39,49 @@ bun run dev -C /path/to/your-project
 **첫 커밋이 없는 저장소도 열 수 있지만, 새 worktree 생성에는 첫 커밋이 필요합니다.**
 linked worktree에서 실행해도 같은 저장소의 전체 worktree를 보여줍니다.
 
+## 개발하면서 빌드 결과 확인
+
+| 확인할 대상 | 빌드 | 실행 |
+| --- | --- | --- |
+| TypeScript 소스 | 필요 없음 | `bun run dev` |
+| JavaScript 빌드 결과 | `bun run build` | `bun run start` |
+| 독립 실행 바이너리 | `bun run build:bin` | `./dist/wt` |
+
+빌드하고 바로 TUI를 열려면 다음 명령을 사용하세요:
+
+```sh
+bun run preview            # JavaScript 빌드 → 실행
+bun run preview:bin        # 독립 실행 바이너리 빌드 → 실행
+```
+
+코드를 수정하면서 JavaScript 산출물을 확인하려면 터미널 두 개를 사용하면 됩니다:
+
+```sh
+# 터미널 1: 소스 변경 시 dist/의 JavaScript와 소스맵 갱신
+bun run build:watch
+
+# 터미널 2: 현재 빌드 결과 실행
+bun run start
+```
+
+빌드가 갱신되면 실행 중인 TUI에서 `q`를 누르고 `bun run start`로 다시 여세요.
+소스 변경 때 TUI 자체를 재시작하려면 `bun run dev:watch`를 사용합니다.
+watch 프로세스는 `Ctrl+C`로 종료합니다. 앱 재시작 중에도 관리 중인 개발 서버는 유지됩니다.
+
+`bun run build:bin`은 **현재 운영체제와 CPU용** `dist/wt` 한 파일을 생성합니다.
+Bun 런타임, 앱 코드, OpenTUI 네이티브 라이브러리를 포함하므로 실행할 때 Bun이나 `node_modules`가
+필요하지 않습니다. Git·`ps`·`lsof`와 실제 개발 서버가 사용하는 도구는 실행 환경에 있어야 합니다.
+바이너리는 다른 폴더로 복사해도 사용할 수 있습니다:
+
+```sh
+./dist/wt --version
+./dist/wt -C /path/to/your-project
+```
+
+바이너리에는 서버 감독 프로세스도 포함됩니다. 실행 중인 이전 바이너리를 유지한 채 새 빌드를
+교체할 수 있도록 임시 파일에서 빌드한 뒤 성공했을 때 `dist/wt`를 교체합니다.
+`build:watch`는 JavaScript 산출물만 갱신하므로 바이너리를 확인할 때는 `build:bin`을 다시 실행하세요.
+
 ## 화면 사용법
 
 1. 목록에서 worktree를 클릭합니다. `*`는 로컬 변경 사항을 뜻합니다.
@@ -64,6 +107,13 @@ linked worktree에서 실행해도 같은 저장소의 전체 worktree를 보여
 | `q` | 앱 종료 |
 
 `+ New worktree`는 새 브랜치 생성과 기존 브랜치 checkout을 모두 지원합니다.
+**Base branch / ref** 아래 목록에서 기준 브랜치를 마우스로 선택할 수 있습니다.
+입력란에 이름 일부를 입력하면 로컬·원격 브랜치를 검색하며, `↓`로 목록에 초점을 옮긴 뒤
+`↑` / `↓`와 `Enter`로 선택할 수도 있습니다. 기본값 `HEAD`는 앱을 실행한 worktree의 현재 커밋입니다.
+태그나 커밋을 직접 입력하는 것도 가능합니다. 원격 브랜치는 이미 fetch한 목록을 사용하므로
+최신 원격 목록이 필요하면 먼저 `git fetch`를 실행하세요.
+**Use an existing branch**를 켜면 기준 브랜치 선택은 비활성화됩니다.
+
 기본 경로는 메인 저장소 옆의 `<repo>.worktrees/<branch>`입니다. 브랜치 이름의 `/` 등은
 `-`로 바꾸며, 목적지 폴더가 이미 있으면 다른 경로를 지정해야 합니다.
 
@@ -109,6 +159,7 @@ wt list
 wt list --json
 wt add feature/login
 wt add feature/login --path /path/to/worktrees/login --base main
+wt add feature/api --base origin/develop
 wt add existing-branch --existing
 wt run -c 'pnpm dev --port 3001'
 wt run feature/login -c 'npm run dev' --port 3001
@@ -154,10 +205,17 @@ bun run check
 bun test
 bun run build
 bun run start
+bun run build:bin
+bun run verify:build
 ```
 
-`bun run build`는 `dist/cli.js`, `dist/supervisor.js`를 만듭니다.
-빌드 결과에도 Bun과 설치된 `node_modules`가 필요합니다. Python 소스나 가상환경은 사용하지 않습니다.
+`bun run build`는 `dist/cli.js`, `dist/supervisor.js`와 각각의 `.map` 소스맵을 만듭니다.
+이 JavaScript 산출물에는 Bun과 설치된 `node_modules`가 필요합니다.
+`bun run build:bin`은 독립 실행 파일 `dist/wt`를 만듭니다.
+
+`bun run verify:build`는 두 형식을 새로 빌드한 뒤 임시 Git 저장소와 독립 테스트 서버를 사용해
+실행·포트 감지·로그·종료를 검증합니다. 바이너리는 소스나 `node_modules`가 없는 별도 폴더로 복사하고,
+PATH에서 Bun과 Node를 제외하여 확인합니다.
 
 테스트는 임시 Git 저장소와 실제 Bun HTTP 서버를 사용합니다. 생성·삭제 보호, 외부 서버 조회,
 포트 충돌, 재연결, PID 재사용 보호, 다중 프로세스 종료, 동시 실행 잠금, 이전 상태 읽기를 검증합니다.
@@ -172,8 +230,10 @@ src/
   process-info.ts     # ps, lsof와 프로세스 식별
   store.ts            # 상태 저장과 잠금
   supervisor.ts       # 분리된 서버 실행·종료
+  standalone.ts       # 단일 바이너리 진입점과 감독 프로세스 실행
   system.ts           # 명령 실행과 경로 유틸리티
   types.ts            # 공통 타입
 tests/                # Bun 통합·화면 테스트
+scripts/              # 바이너리 빌드 및 산출물 검증
 bin/wt                # 로컬 실행 파일
 ```

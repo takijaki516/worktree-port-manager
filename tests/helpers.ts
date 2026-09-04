@@ -36,6 +36,16 @@ export async function fixture() {
   };
 }
 
+export async function seedBaseBranches(repo: Repository): Promise<string> {
+  await repo.git(["checkout", "-b", "develop"]);
+  await repo.git(["commit", "--allow-empty", "-m", "Base branch commit"]);
+  const head = (await repo.git(["rev-parse", "HEAD"])).trim();
+  await repo.git(["checkout", "main"]);
+  await repo.git(["update-ref", "refs/remotes/origin/release", head]);
+  await repo.git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release"]);
+  return head;
+}
+
 export function freePort(): number {
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("test") });
   const port = server.port;

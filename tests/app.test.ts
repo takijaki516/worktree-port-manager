@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
-import { InputRenderable, Renderable } from "@opentui/core";
+import { InputRenderable, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { WorktreeApp } from "../src/app.ts";
-import { eventually, fixture, freePort, serverCommand } from "./helpers.ts";
+import { eventually, fixture, freePort, seedBaseBranches, serverCommand } from "./helpers.ts";
 
 let context: Awaited<ReturnType<typeof fixture>>;
 let terminal: TestRendererSetup;
@@ -116,4 +116,71 @@ test("small terminal keeps input isolated from shortcuts and supports Tab and mo
   terminal.mockInput.pressEscape();
   await eventually(() => !app.modal);
   expect(Boolean(app.modal)).toBe(false);
+});
+
+test("mouse selects a local base and a filtered remote base, including ambiguous names", async () => {
+  const baseHead = await seedBaseBranches(context.repo);
+  // The remote selection must use its full ref even if a local name is identical.
+  await context.repo.git(["branch", "origin/release"]);
+  for (const [index, ref] of ["refs/heads/develop", "refs/remotes/origin/release"].entries()) {
+    await click("add");
+    await eventually(() =>
+      Boolean(terminal.renderer.root.findDescendantById(`base-branch:${ref}`)),
+    );
+    fill("branch", `selected-base-${index}`);
+    if (index === 1) fill("base", "origin/release");
+    await click(`base-branch:${ref}`);
+    expect(app.modal?.kind).toBe("add");
+    await click("submit");
+    await idle(() => app.workspaces.length === index + 2);
+    expect((await context.repo.find(`selected-base-${index}`)).head).toBe(baseHead);
+  }
+});
+
+test("base list scrolls and keyboard selection works in a small terminal", async () => {
+  const baseHead = await seedBaseBranches(context.repo);
+  for (let index = 0; index < 8; index++) await context.repo.git(["branch", `feature/${index}`]);
+  terminal.resize(80, 24);
+  await click("add");
+  await eventually(() =>
+    Boolean(terminal.renderer.root.findDescendantById("base-branch:refs/remotes/origin/release")),
+  );
+  fill("branch", "keyboard-base");
+  await terminal.renderOnce();
+  const list = element("base-branches");
+  if (!(list instanceof ScrollBoxRenderable)) throw new Error("Missing branch list");
+  await terminal.mockMouse.scroll(list.x + 2, list.y + 1, "down");
+  await terminal.renderOnce();
+  expect(list.scrollTop).toBeGreaterThan(0);
+  await click("base");
+  fill("base", "origin/rel");
+  terminal.mockInput.pressArrow("down");
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe("base-branches");
+  terminal.mockInput.pressEnter();
+  expect(app.modal?.kind).toBe("add");
+  const base = element("base");
+  expect(base instanceof InputRenderable && base.value).toBe("origin/release");
+  expect(element("submit").y + element("submit").height).toBeLessThanOrEqual(24);
+  await click("submit");
+  await idle(() => app.workspaces.length === 2);
+  expect((await context.repo.find("keyboard-base")).head).toBe(baseHead);
+});
+
+test("existing branch mode disables and skips base selection", async () => {
+  const baseHead = await seedBaseBranches(context.repo);
+  await click("add");
+  await eventually(() =>
+    Boolean(terminal.renderer.root.findDescendantById("base-branch:refs/heads/develop")),
+  );
+  fill("branch", "develop");
+  fill("base", "invalid-ref");
+  await click("existing");
+  expect(element("base").focusable).toBe(false);
+  expect(element("base-branches").focusable).toBe(false);
+  await click("path");
+  terminal.mockInput.pressTab();
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe("existing");
+  await click("submit");
+  await idle(() => app.workspaces.length === 2);
+  expect((await context.repo.find("develop")).head).toBe(baseHead);
 });

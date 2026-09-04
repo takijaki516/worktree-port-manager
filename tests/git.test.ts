@@ -3,7 +3,7 @@ import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseWorktrees, Repository } from "../src/git.ts";
 import { execute } from "../src/system.ts";
-import { fixture } from "./helpers.ts";
+import { fixture, seedBaseBranches } from "./helpers.ts";
 
 let context: Awaited<ReturnType<typeof fixture>>;
 beforeEach(async () => {
@@ -64,4 +64,21 @@ test("existing branch checkout and destination collision", async () => {
     "already exists",
   );
   await expect(context.repo.create({ branch: "--orphan" })).rejects.toThrow("valid branch");
+});
+
+test("lists local and remote bases without symbolic aliases and creates at the selected commit", async () => {
+  const baseHead = await seedBaseBranches(context.repo);
+  const originalHead = (await context.repo.find()).head;
+  expect(baseHead).not.toBe(originalHead);
+  const branches = await context.repo.branches();
+  expect(branches.map((branch) => branch.name)).toEqual(["develop", "main", "origin/release"]);
+  for (const [index, base] of branches.filter((branch) => branch.name !== "main").entries()) {
+    const tree = await context.repo.create({ branch: `from-base-${index}`, base: base.ref });
+    expect(tree.head).toBe(baseHead);
+  }
+  expect((await context.repo.find()).head).toBe(originalHead);
+  await expect(
+    context.repo.create({ branch: "invalid-base", base: "missing-ref" }),
+  ).rejects.toThrow();
+  expect(await context.repo.git(["branch", "--list", "invalid-base"])).toBe("");
 });

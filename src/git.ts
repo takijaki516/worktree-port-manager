@@ -34,6 +34,12 @@ export interface CreateOptions {
   existing?: boolean;
 }
 
+export interface BranchRef {
+  name: string;
+  ref: string;
+  remote: boolean;
+}
+
 export class Repository {
   private constructor(
     readonly directory: string,
@@ -58,6 +64,27 @@ export class Repository {
 
   git(args: string[], directory = this.directory): Promise<string> {
     return Repository.command(directory, args);
+  }
+
+  async branches(): Promise<BranchRef[]> {
+    const output = await this.git([
+      "for-each-ref",
+      "--sort=refname",
+      "--format=%(refname)%00%(symref)",
+      "refs/heads/",
+      "refs/remotes/",
+    ]);
+    return output.split("\n").flatMap((line) => {
+      const [ref, symbolic] = line.split("\0");
+      if (!ref || symbolic) return [];
+      return [
+        {
+          name: ref.replace(/^refs\/(heads|remotes)\//, ""),
+          ref,
+          remote: ref.startsWith("refs/remotes/"),
+        },
+      ];
+    });
   }
 
   async list(): Promise<Worktree[]> {

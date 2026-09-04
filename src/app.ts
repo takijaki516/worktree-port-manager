@@ -9,6 +9,7 @@ import {
   ScrollBoxRenderable,
   TextRenderable,
 } from "@opentui/core";
+import type { BranchRef } from "./git.ts";
 import type { Manager } from "./manager.ts";
 import { portUrl } from "./process-info.ts";
 import { sleep } from "./system.ts";
@@ -482,7 +483,7 @@ export class WorktreeApp {
     if (key.name === "tab") {
       key.preventDefault();
       const items = (this.modal?.focus ?? this.focus).filter(
-        (item) => item.visible && (this.buttons.get(item.id)?.enabled ?? true),
+        (item) => item.visible && item.focusable && (this.buttons.get(item.id)?.enabled ?? true),
       );
       const focused = this.renderer.currentFocusedRenderable;
       const index = focused ? items.indexOf(focused) : -1;
@@ -621,7 +622,7 @@ export class WorktreeApp {
 
   openAdd(): void {
     if (this.busy || this.modal) return;
-    const dialog = this.createDialog("add", "New worktree", 20);
+    const dialog = this.createDialog("add", "New worktree", 24);
     const branch = this.field(dialog, "branch", "Branch", "", "feature/login");
     const path = this.field(
       dialog,
@@ -630,8 +631,127 @@ export class WorktreeApp {
       "",
       "Default: sibling <repo>.worktrees/<branch>",
     );
-    const base = this.field(dialog, "base", "Base ref · for a new branch", "HEAD");
+    const base = this.field(
+      dialog,
+      "base",
+      "Base branch / ref · type to filter, click to choose",
+      "HEAD",
+    );
     let existing = false;
+    const choices = new ScrollBoxRenderable(this.renderer, {
+      id: "base-branches",
+      height: 4,
+      flexShrink: 1,
+      minHeight: 1,
+      scrollX: false,
+      backgroundColor: color.raised,
+    });
+    dialog.panel.add(choices);
+    dialog.focus.push(choices);
+    const hint = this.text(
+      dialog.panel,
+      "base-hint",
+      "Loading local and fetched remote branches…",
+      {
+        height: 1,
+        fg: color.muted,
+      },
+    );
+    const head: BranchRef = { name: "HEAD", ref: "HEAD", remote: false };
+    let branches: BranchRef[] = [head];
+    let filtered = branches;
+    let selectedBase: BranchRef | undefined = head;
+    let cursor = 0;
+    let picking = false;
+    let rows: BoxRenderable[] = [];
+    const highlight = () => {
+      for (const [index, row] of rows.entries()) {
+        row.backgroundColor = index === cursor ? color.selected : color.raised;
+      }
+      const row = rows[cursor];
+      if (row) choices.scrollChildIntoView(row.id);
+    };
+    const pick = (index: number) => {
+      const choice = filtered[index];
+      if (existing || !choice) return;
+      picking = true;
+      base.value = choice.name;
+      picking = false;
+      selectedBase = choice;
+      cursor = index;
+      highlight();
+      choices.focus();
+    };
+    const renderBranches = () => {
+      for (const child of choices.getChildren()) child.destroyRecursively();
+      const query = base.value.trim().toLowerCase();
+      filtered = branches.filter(
+        (branch) =>
+          !query ||
+          query === "head" ||
+          branch.name.toLowerCase().includes(query) ||
+          branch.ref.toLowerCase().includes(query),
+      );
+      cursor = Math.max(
+        0,
+        filtered.findIndex((branch) => branch.ref === selectedBase?.ref),
+      );
+      rows = filtered.map((branch, index) => {
+        const row = this.box(choices, `base-branch:${branch.ref}`, {
+          height: 1,
+          onMouseUp: (event) => {
+            if (event.button === 0) pick(index);
+          },
+        });
+        const source =
+          branch.ref === "HEAD" ? "current checkout" : branch.remote ? "remote" : "local";
+        this.text(row, `base-branch-label:${branch.ref}`, `${branch.name}  ·  ${source}`, {
+          height: 1,
+        });
+        return row;
+      });
+      if (!rows.length)
+        this.text(choices, "base-empty", "No matching branches · you can enter a ref or commit.", {
+          height: 1,
+          fg: color.muted,
+        });
+      choices.scrollTo(0);
+      highlight();
+    };
+    base.on(InputRenderableEvents.INPUT, () => {
+      if (picking) return;
+      selectedBase = undefined;
+      renderBranches();
+    });
+    base.onKeyDown = (key) => {
+      if (key.name === "down" && !existing) {
+        key.preventDefault();
+        choices.focus();
+      }
+    };
+    choices.onKeyDown = (key) => {
+      if (existing) return;
+      if (key.name === "return" || key.name === "space") {
+        key.preventDefault();
+        pick(cursor);
+      } else if (key.name === "up" || key.name === "down") {
+        key.preventDefault();
+        cursor = Math.max(0, Math.min(filtered.length - 1, cursor + (key.name === "up" ? -1 : 1)));
+        highlight();
+      }
+    };
+    renderBranches();
+    void this.manager.repo
+      .branches()
+      .then((refs) => {
+        if (this.modal !== dialog || this.disposed) return;
+        branches = [head, ...refs];
+        renderBranches();
+        if (!existing) hint.content = "Local + fetched remote branches · ↑/↓ then Enter to choose";
+      })
+      .catch((error) => {
+        if (this.modal === dialog && !this.disposed) dialog.error.content = errorMessage(error);
+      });
     this.button(
       dialog.panel,
       "existing",
@@ -640,6 +760,12 @@ export class WorktreeApp {
         existing = !existing;
         const toggle = this.buttons.get("existing");
         if (toggle) toggle.text.content = `${existing ? "[x]" : "[ ]"} Use an existing branch`;
+        base.focusable = !existing;
+        choices.focusable = !existing;
+        base.opacity = choices.opacity = existing ? 0.4 : 1;
+        hint.content = existing
+          ? "Base is not used when checking out an existing branch."
+          : "Local + fetched remote branches · ↑/↓ then Enter to choose";
       },
       false,
       undefined,
@@ -653,7 +779,7 @@ export class WorktreeApp {
       const options = {
         branch: branch.value.trim(),
         path: path.value.trim() || undefined,
-        base: base.value.trim() || "HEAD",
+        base: existing ? undefined : (selectedBase?.ref ?? (base.value.trim() || "HEAD")),
         existing,
       };
       this.closeModal();

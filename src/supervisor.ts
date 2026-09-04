@@ -14,7 +14,8 @@ export interface RunSpec {
   token: string;
 }
 
-async function supervise(specPath: string): Promise<void> {
+// Shared by the Bun sidecar and the standalone binary's internal entry point.
+export async function supervise(specPath: string): Promise<void> {
   const spec: RunSpec = JSON.parse(await readFile(specPath, "utf8"));
   let stopped = false;
   const requestStop = () => {
