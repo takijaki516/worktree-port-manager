@@ -1,0 +1,5 @@
+dist/
+work/
+.DS_Store
+node_modules/
+coverage/
