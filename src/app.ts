@@ -90,11 +90,10 @@ export class WorktreeApp {
     });
     renderer.root.add(this.root);
     const masthead = this.box(this.root, "masthead", {
-      height: 2,
+      height: 1,
       backgroundColor: color.panel,
       paddingX: 2,
     });
-    this.text(masthead, "brand", "◈  WORKTREE MANAGER   /   TypeScript", { fg: color.accent });
     this.text(masthead, "repo", manager.repo.root, { fg: color.muted });
     const toolbar = this.box(this.root, "toolbar", {
       height: 3,
