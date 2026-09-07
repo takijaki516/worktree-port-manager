@@ -632,7 +632,7 @@ export class WorktreeApp {
       "path",
       "Directory · optional",
       "",
-      "Default: sibling <repo>.worktrees/<branch>",
+      "Default: ~/.worktree-managers/<project>/<branch>",
     );
     const base = this.field(
       dialog,

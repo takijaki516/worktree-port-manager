@@ -5,10 +5,10 @@ import { quote } from "shell-quote";
 import { Repository } from "../src/git.ts";
 import { Manager } from "../src/manager.ts";
 import { isLive, processTable } from "../src/process-info.ts";
-import { execute, sleep } from "../src/system.ts";
+import { canonical, execute, sleep } from "../src/system.ts";
 
 export async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "wt-ts-"));
+  const directory = await canonical(await mkdtemp(join(tmpdir(), "wt-ts-")));
   const path = join(directory, "repo with spaces");
   await execute("git", ["init", "-b", "main", path]);
   for (const [key, value] of [
@@ -21,7 +21,7 @@ export async function fixture() {
   await writeFile(join(path, "README.md"), "test repository\n");
   await execute("git", ["-C", path, "add", "."]);
   await execute("git", ["-C", path, "commit", "-m", "Initial"]);
-  const repo = await Repository.open(path);
+  const repo = await Repository.open(path, join(directory, ".worktree-managers"));
   const manager = new Manager(repo);
   return {
     directory,

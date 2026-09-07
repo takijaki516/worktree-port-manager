@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseWorktrees, Repository } from "../src/git.ts";
 import { execute } from "../src/system.ts";
@@ -15,8 +16,13 @@ afterEach(async () => {
 
 test("create, find from a linked worktree, remove and keep the branch", async () => {
   const tree = await context.repo.create({ branch: "feature/login" });
-  expect(tree.path.endsWith("feature-login")).toBe(true);
-  const linked = await Repository.open(tree.path);
+  expect(tree.path).toBe(
+    join(context.repo.worktreeDirectory, "repo with spaces", "feature--login"),
+  );
+  const linked = await Repository.open(tree.path, context.repo.worktreeDirectory);
+  expect(await linked.suggestedPath("fix/startup")).toBe(
+    join(context.repo.worktreeDirectory, "repo with spaces", "fix--startup"),
+  );
   expect(linked.commonDir).toBe(context.repo.commonDir);
   expect((await linked.find()).path).toBe(tree.path);
   expect(await linked.list()).toHaveLength(2);
@@ -64,6 +70,54 @@ test("existing branch checkout and destination collision", async () => {
     "already exists",
   );
   await expect(context.repo.create({ branch: "--orphan" })).rejects.toThrow("valid branch");
+});
+
+test("default storage is in the home directory and explicit destinations still work", async () => {
+  const repo = await Repository.open(context.repo.root);
+  expect(repo.worktreeDirectory).toBe(join(homedir(), ".worktree-managers"));
+  const destination = join(context.directory, "custom-worktree");
+  const tree = await repo.create({ branch: "custom", path: destination });
+  expect(tree.path).toBe(destination);
+});
+
+test("colliding branch folder names get stable identifiers without changing branch names", async () => {
+  const first = await context.repo.create({ branch: "feature/login" });
+  const second = await context.repo.create({ branch: "feature--login" });
+  expect(first.path).not.toBe(second.path);
+  expect(second.path).toMatch(/feature--login--[a-f0-9]{8}$/);
+  expect(second.branch).toBe("feature--login");
+  expect(await context.repo.suggestedPath("feature--login")).toBe(second.path);
+  expect((await context.repo.find("feature/login")).path).toBe(first.path);
+});
+
+test("same-named repositories use separate stable project folders", async () => {
+  const otherPath = join(context.directory, "another", "repo with spaces");
+  await context.repo.git(["clone", "--", context.repo.root, otherPath]);
+  const other = await Repository.open(otherPath, context.repo.worktreeDirectory);
+  const [first, second] = await Promise.all([
+    context.repo.create({ branch: "feature/login" }),
+    other.create({ branch: "feature/login" }),
+  ]);
+  expect(first.path).not.toBe(second.path);
+  expect(
+    [first.path, second.path].some((path) => /repo with spaces--[a-f0-9]{8}\//.test(path)),
+  ).toBe(true);
+  expect(await context.repo.suggestedPath("feature/login")).toBe(first.path);
+  const reopened = await Repository.open(second.path, context.repo.worktreeDirectory);
+  expect(await reopened.suggestedPath("feature/login")).toBe(second.path);
+});
+
+test("existing unmanaged folders are preserved when selecting default paths", async () => {
+  const project = join(context.repo.worktreeDirectory, "repo with spaces");
+  await mkdir(project, { recursive: true });
+  await writeFile(join(project, "keep.txt"), "keep project");
+  const destination = await context.repo.suggestedPath("fix/startup");
+  await mkdir(destination, { recursive: true });
+  await writeFile(join(destination, "keep.txt"), "keep branch");
+  const tree = await context.repo.create({ branch: "fix/startup" });
+  expect(tree.path).not.toBe(destination);
+  expect(await readFile(join(project, "keep.txt"), "utf8")).toBe("keep project");
+  expect(await readFile(join(destination, "keep.txt"), "utf8")).toBe("keep branch");
 });
 
 test("lists local and remote bases without symbolic aliases and creates at the selected commit", async () => {

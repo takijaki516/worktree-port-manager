@@ -1,6 +1,9 @@
-import { stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import { canonical, execute } from "./system.ts";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
+import lockfile from "proper-lockfile";
+import { canonical, execute, isMissing } from "./system.ts";
 import { type Worktree, WorktreeError } from "./types.ts";
 
 export function parseWorktrees(raw: string): Worktree[] {
@@ -45,15 +48,24 @@ export class Repository {
     readonly directory: string,
     readonly root: string,
     readonly commonDir: string,
+    readonly worktreeDirectory: string,
   ) {}
 
-  static async open(directory: string): Promise<Repository> {
+  static async open(
+    directory: string,
+    worktreeDirectory = join(homedir(), ".worktree-managers"),
+  ): Promise<Repository> {
     const path = await canonical(directory);
     const [root, common] = await Promise.all([
       Repository.command(path, ["rev-parse", "--show-toplevel"]),
       Repository.command(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
     ]);
-    return new Repository(path, await canonical(root.trim()), await canonical(common.trim()));
+    return new Repository(
+      path,
+      await canonical(root.trim()),
+      await canonical(common.trim()),
+      await canonical(worktreeDirectory),
+    );
   }
 
   static async command(directory: string, args: string[]): Promise<string> {
@@ -115,11 +127,48 @@ export class Repository {
   }
 
   async suggestedPath(branch: string): Promise<string> {
-    const main = (await this.list())[0];
+    const trees = await this.list();
+    const main = trees[0];
     if (!main) throw new WorktreeError("No worktrees found.");
     const slug =
-      branch.replace(/[^\p{L}\p{N}_.-]+/gu, "-").replace(/^[.-]+|[.-]+$/g, "") || "worktree";
-    return join(dirname(main.path), `${basename(main.path)}.worktrees`, slug);
+      branch
+        .replaceAll("/", "--")
+        .replace(/[^\p{L}\p{N}_.-]+/gu, "-")
+        .replace(/^[.-]+|[.-]+$/g, "") || "worktree";
+    const project = await this.projectDirectory(basename(main.path));
+    for (let index = 0; ; index++) {
+      const path = join(project, uniqueName(slug, branch, index));
+      const registered = trees.find((tree) => tree.path === path);
+      if (registered?.branch === branch || (!registered && !(await pathEntry(path)))) return path;
+    }
+  }
+
+  private async projectDirectory(name: string): Promise<string> {
+    await mkdir(this.worktreeDirectory, { recursive: true });
+    const release = await lockfile.lock(this.worktreeDirectory, {
+      retries: { retries: 60, minTimeout: 50, maxTimeout: 100 },
+    });
+    try {
+      for (let index = 0; ; index++) {
+        const path = join(this.worktreeDirectory, uniqueName(name, this.commonDir, index));
+        const entry = await pathEntry(path);
+        const marker = join(path, ".repository");
+        if (!entry) {
+          await mkdir(path);
+          await writeFile(marker, this.commonDir, { flag: "wx", mode: 0o600 });
+          return await canonical(path);
+        }
+        if (entry.isDirectory()) {
+          const owner = await readFile(marker, "utf8").catch((error) => {
+            if (isMissing(error)) return undefined;
+            throw error;
+          });
+          if (owner === this.commonDir) return await canonical(path);
+        }
+      }
+    } finally {
+      await release();
+    }
   }
 
   async create(options: CreateOptions): Promise<Worktree> {
@@ -156,4 +205,17 @@ export class Repository {
       throw new WorktreeError("This worktree has local changes. Commit or stash them first.");
     await this.git(["worktree", "remove", "--", tree.path]);
   }
+}
+
+function uniqueName(name: string, identity: string, index: number): string {
+  if (index === 0) return name;
+  const hash = createHash("sha256").update(identity).digest("hex").slice(0, 8);
+  return `${name}--${hash}${index > 1 ? `-${index}` : ""}`;
+}
+
+async function pathEntry(path: string) {
+  return lstat(path).catch((error) => {
+    if (isMissing(error)) return undefined;
+    throw error;
+  });
 }
