@@ -189,7 +189,7 @@ export class Repository {
     await this.git([
       "worktree",
       "add",
-      ...(options.existing ? [] : ["-b", branch]),
+      ...(options.existing ? [] : ["--no-track", "-b", branch]),
       "--",
       path,
       options.existing ? branch : base,

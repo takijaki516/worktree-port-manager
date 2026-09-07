@@ -136,3 +136,34 @@ test("lists local and remote bases without symbolic aliases and creates at the s
   ).rejects.toThrow();
   expect(await context.repo.git(["branch", "--list", "invalid-base"])).toBe("");
 });
+
+test("a remote base does not become the new branch's upstream", async () => {
+  const remote = join(context.directory, "remote.git");
+  await context.repo.git(["init", "--bare", remote]);
+  await context.repo.git(["remote", "add", "origin", remote]);
+  await context.repo.git(["update-ref", "refs/remotes/origin/master", "HEAD"]);
+  await context.repo.git(["config", "branch.autoSetupMerge", "true"]);
+  await context.repo.git(["config", "push.default", "simple"]);
+  await context.repo.git(["config", "push.autoSetupRemote", "false"]);
+  const tree = await context.repo.create({
+    branch: "feature/login",
+    base: "refs/remotes/origin/master",
+  });
+  const result = await execute("git", ["-C", tree.path, "push", "--dry-run"]);
+  expect(result.stderr).not.toContain("does not match");
+  expect(result.stderr).toContain("has no upstream branch");
+  expect(
+    await context.repo.git(["for-each-ref", "--format=%(upstream)", "refs/heads/feature/login"]),
+  ).toBe("\n");
+  expect(tree.head).toBe((await context.repo.git(["rev-parse", "origin/master"])).trim());
+});
+
+test("checking out an existing branch preserves its upstream", async () => {
+  await context.repo.git(["remote", "add", "origin", join(context.directory, "remote.git")]);
+  await context.repo.git(["update-ref", "refs/remotes/origin/master", "HEAD"]);
+  await context.repo.git(["branch", "--track", "existing", "origin/master"]);
+  const tree = await context.repo.create({ branch: "existing", existing: true });
+  expect(
+    (await context.repo.git(["rev-parse", "--abbrev-ref", "@{upstream}"], tree.path)).trim(),
+  ).toBe("origin/master");
+});
