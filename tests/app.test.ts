@@ -128,8 +128,12 @@ test("mouse selects a local base and a filtered remote base, including ambiguous
       Boolean(terminal.renderer.root.findDescendantById(`base-branch:${ref}`)),
     );
     fill("branch", `selected-base-${index}`);
+    expect(element("base-branches").visible).toBe(false);
+    await click("base");
+    expect(element("base-branches").visible).toBe(true);
     if (index === 1) fill("base", "origin/release");
     await click(`base-branch:${ref}`);
+    expect(element("base-branches").visible).toBe(false);
     expect(app.modal?.kind).toBe("add");
     await click("submit");
     await idle(() => app.workspaces.length === index + 2);
@@ -146,6 +150,7 @@ test("base list scrolls and keyboard selection works in a small terminal", async
     Boolean(terminal.renderer.root.findDescendantById("base-branch:refs/remotes/origin/release")),
   );
   fill("branch", "keyboard-base");
+  await click("base");
   await terminal.renderOnce();
   const list = element("base-branches");
   if (!(list instanceof ScrollBoxRenderable)) throw new Error("Missing branch list");
@@ -160,10 +165,40 @@ test("base list scrolls and keyboard selection works in a small terminal", async
   expect(app.modal?.kind).toBe("add");
   const base = element("base");
   expect(base instanceof InputRenderable && base.value).toBe("origin/release");
+  expect(element("base-branches").visible).toBe(false);
   expect(element("submit").y + element("submit").height).toBeLessThanOrEqual(24);
   await click("submit");
   await idle(() => app.workspaces.length === 2);
   expect((await context.repo.find("keyboard-base")).head).toBe(baseHead);
+});
+
+test("base dropdown reopens with all options and Escape and Tab dismiss it", async () => {
+  await seedBaseBranches(context.repo);
+  await click("add");
+  await eventually(() =>
+    Boolean(terminal.renderer.root.findDescendantById("base-branch:refs/heads/develop")),
+  );
+  await click("base");
+  fill("base", "develop");
+  await click("base-branch:refs/heads/develop");
+  expect(element("base-branches").visible).toBe(false);
+  terminal.mockInput.pressArrow("down");
+  await terminal.renderOnce();
+  expect(element("base-branches").visible).toBe(true);
+  expect(element("base-branch:refs/remotes/origin/release")).toBeDefined();
+  terminal.mockInput.pressEscape();
+  await eventually(() => !element("base-branches").visible);
+  expect(app.modal?.kind).toBe("add");
+  expect(element("base-branches").visible).toBe(false);
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe("base");
+  terminal.mockInput.pressEnter();
+  expect(element("base-branches").visible).toBe(true);
+  terminal.mockInput.pressTab();
+  expect(element("base-branches").visible).toBe(false);
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe("existing");
+  terminal.mockInput.pressEscape();
+  await eventually(() => !app.modal);
+  expect(app.modal).toBeUndefined();
 });
 
 test("existing branch mode disables and skips base selection", async () => {

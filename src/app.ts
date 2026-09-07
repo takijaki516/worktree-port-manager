@@ -42,6 +42,7 @@ interface Dialog {
   focus: Renderable[];
   error: TextRenderable;
   submit: () => void;
+  closeDropdown?: () => boolean;
 }
 
 export class WorktreeApp {
@@ -482,6 +483,7 @@ export class WorktreeApp {
   private onKey(key: KeyEvent): void {
     if (key.name === "tab") {
       key.preventDefault();
+      this.modal?.closeDropdown?.();
       const items = (this.modal?.focus ?? this.focus).filter(
         (item) => item.visible && item.focusable && (this.buttons.get(item.id)?.enabled ?? true),
       );
@@ -493,6 +495,7 @@ export class WorktreeApp {
     if (this.modal) {
       if (key.name === "escape") {
         key.preventDefault();
+        if (this.modal.closeDropdown?.()) return;
         this.closeModal();
       }
       return;
@@ -634,7 +637,7 @@ export class WorktreeApp {
     const base = this.field(
       dialog,
       "base",
-      "Base branch / ref · type to filter, click to choose",
+      "Base branch / ref ▾ · click or ↓ to open, type to filter",
       "HEAD",
     );
     let existing = false;
@@ -645,6 +648,7 @@ export class WorktreeApp {
       minHeight: 1,
       scrollX: false,
       backgroundColor: color.raised,
+      visible: false,
     });
     dialog.panel.add(choices);
     dialog.focus.push(choices);
@@ -664,6 +668,15 @@ export class WorktreeApp {
     let cursor = 0;
     let picking = false;
     let rows: BoxRenderable[] = [];
+    const closeDropdown = () => {
+      if (!choices.visible) return false;
+      if (choices.focused) base.focus();
+      choices.visible = false;
+      choices.focusable = false;
+      return true;
+    };
+    dialog.closeDropdown = closeDropdown;
+    choices.focusable = false;
     const highlight = () => {
       for (const [index, row] of rows.entries()) {
         row.backgroundColor = index === cursor ? color.selected : color.raised;
@@ -680,13 +693,15 @@ export class WorktreeApp {
       selectedBase = choice;
       cursor = index;
       highlight();
-      choices.focus();
+      closeDropdown();
+      base.focus();
     };
     const renderBranches = () => {
       for (const child of choices.getChildren()) child.destroyRecursively();
       const query = base.value.trim().toLowerCase();
       filtered = branches.filter(
         (branch) =>
+          selectedBase ||
           !query ||
           query === "head" ||
           branch.name.toLowerCase().includes(query) ||
@@ -718,14 +733,29 @@ export class WorktreeApp {
       choices.scrollTo(0);
       highlight();
     };
+    const openDropdown = () => {
+      if (existing) return;
+      choices.visible = true;
+      choices.focusable = true;
+      renderBranches();
+    };
+    base.onMouseDown = (event) => {
+      if (event.button === 0) openDropdown();
+    };
+    base.removeAllListeners(InputRenderableEvents.ENTER);
+    base.on(InputRenderableEvents.ENTER, () => {
+      if (choices.visible) pick(cursor);
+      else openDropdown();
+    });
     base.on(InputRenderableEvents.INPUT, () => {
       if (picking) return;
       selectedBase = undefined;
-      renderBranches();
+      openDropdown();
     });
     base.onKeyDown = (key) => {
       if (key.name === "down" && !existing) {
         key.preventDefault();
+        openDropdown();
         choices.focus();
       }
     };
@@ -758,10 +788,10 @@ export class WorktreeApp {
       "[ ] Use an existing branch",
       () => {
         existing = !existing;
+        closeDropdown();
         const toggle = this.buttons.get("existing");
         if (toggle) toggle.text.content = `${existing ? "[x]" : "[ ]"} Use an existing branch`;
         base.focusable = !existing;
-        choices.focusable = !existing;
         base.opacity = choices.opacity = existing ? 0.4 : 1;
         hint.content = existing
           ? "Base is not used when checking out an existing branch."
