@@ -219,3 +219,46 @@ test("existing branch mode disables and skips base selection", async () => {
   await idle(() => app.workspaces.length === 2);
   expect((await context.repo.find("develop")).head).toBe(baseHead);
 });
+
+test("mouse selects text and panel titles, and copies without activating buttons", async () => {
+  const copied: string[] = [];
+  terminal.renderer.copyToClipboardOSC52 = (text) => {
+    copied.push(text);
+    return true;
+  };
+  for (const id of ["repo", "tree-panel-title", "details", "logs-title", "log-text", "add-label"]) {
+    await terminal.renderOnce();
+    const node = element(id);
+    await terminal.mockMouse.drag(node.x, node.y, node.x + 5, node.y);
+    const selected = terminal.renderer.getSelection()?.getSelectedText();
+    expect(selected?.trim().length).toBeGreaterThan(0);
+    expect(app.modal).toBeUndefined();
+    terminal.mockInput.pressKey("y", { ctrl: true });
+    expect(copied.at(-1)).toBe(selected);
+    terminal.renderer.clearSelection();
+  }
+  await click("add");
+  expect(app.modal?.kind).toBe("add");
+  const title = element("dialog-title");
+  await terminal.mockMouse.drag(title.x, title.y, title.x + 5, title.y);
+  expect(terminal.renderer.getSelection()?.getSelectedText()).toContain("New");
+  fill("branch", "feature/selection");
+  const input = element("branch");
+  await terminal.mockMouse.drag(input.x, input.y, input.x + 7, input.y);
+  expect(terminal.renderer.getSelection()?.getSelectedText()).toContain("feature");
+  terminal.mockInput.pressKey("y", { ctrl: true });
+  expect(copied.at(-1)).toContain("feature");
+});
+
+test("dragging a worktree label does not change the selected worktree", async () => {
+  const tree = await context.repo.create({ branch: "feature/selection" });
+  await app.refresh();
+  await terminal.renderOnce();
+  const node = element(`tree-text:${tree.path}`);
+  await terminal.mockMouse.drag(node.x, node.y, node.x + 7, node.y);
+  expect(terminal.renderer.getSelection()?.getSelectedText()).toContain("feature");
+  expect(app.current?.tree.branch).toBe("main");
+  terminal.renderer.clearSelection();
+  await click(`tree:${tree.path}`);
+  expect(app.current?.tree.branch).toBe("feature/selection");
+});

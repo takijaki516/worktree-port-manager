@@ -182,7 +182,6 @@ export class WorktreeApp {
       border: true,
       borderStyle: "rounded",
       borderColor: color.line,
-      title: " SERVER OUTPUT ",
       backgroundColor: color.panel,
       paddingX: 1,
       scrollX: false,
@@ -190,6 +189,7 @@ export class WorktreeApp {
       stickyStart: "bottom",
     });
     this.content.add(this.logPanel);
+    this.setPanelTitle(this.logPanel, " SERVER OUTPUT ");
     this.logText = this.text(this.logPanel, "log-text", "Run a server to see its output here.");
     this.focus.push(this.logPanel);
     this.status = this.text(this.root, "status", "Loading repository…", {
@@ -200,7 +200,7 @@ export class WorktreeApp {
     this.text(
       this.root,
       "footer",
-      " n New   r Run   s Stop   o Browser   e Editor   F5 Refresh   q Quit   Tab Navigate ",
+      " n New   r Run   s Stop   o Browser   e Editor   F5 Refresh   q Quit   Tab Navigate   Ctrl+Y Copy ",
       { height: 1, bg: color.raised, fg: color.accent },
     );
     renderer.keyInput.on("keypress", this.keyHandler);
@@ -251,15 +251,34 @@ export class WorktreeApp {
     title: string,
     options: Partial<ConstructorParameters<typeof BoxRenderable>[1]> = {},
   ) {
-    return this.box(parent, id, {
+    const panel = this.box(parent, id, {
       border: true,
       borderStyle: "rounded",
       borderColor: color.line,
-      title,
-      titleColor: color.accent,
       backgroundColor: color.panel,
       paddingX: 1,
       ...options,
+    });
+    this.setPanelTitle(panel, title);
+    return panel;
+  }
+
+  private setPanelTitle(panel: BoxRenderable, title: string): void {
+    const id = `${panel.id}-title`;
+    const container = panel instanceof ScrollBoxRenderable ? panel.wrapper : panel;
+    const existing = container.findDescendantById(id);
+    if (existing instanceof TextRenderable) {
+      existing.content = title;
+      return;
+    }
+    this.text(container, id, title, {
+      position: "absolute",
+      top: -1,
+      left: 1,
+      height: 1,
+      maxWidth: "90%",
+      fg: color.accent,
+      bg: color.panel,
     });
   }
 
@@ -274,7 +293,9 @@ export class WorktreeApp {
       content,
       fg: color.text,
       flexShrink: 0,
-      selectable: false,
+      selectable: true,
+      selectionBg: color.accent,
+      selectionFg: color.bg,
       ...options,
     });
     parent.add(text);
@@ -312,7 +333,7 @@ export class WorktreeApp {
       alignItems: "center",
       justifyContent: "center",
       onMouseUp: (event) => {
-        if (event.button === 0) invoke();
+        if (event.button === 0 && !this.isTextDrag()) invoke();
       },
       onKeyDown: (key) => {
         if (key.name === "return" || key.name === "space") {
@@ -391,7 +412,8 @@ export class WorktreeApp {
           height: 2,
           focusable: true,
           onMouseUp: (event) => {
-            if (event.button === 0 && !this.modal) this.selectTree(ws.tree.path);
+            if (event.button === 0 && !this.modal && !this.isTextDrag())
+              this.selectTree(ws.tree.path);
           },
         });
         const text = this.text(box, `tree-text:${ws.tree.path}`, "", { height: 2 });
@@ -423,7 +445,7 @@ export class WorktreeApp {
       this.manager.logs(ws.tree),
     ]);
     if (revision !== this.detailRevision || this.disposed) return;
-    this.detailPanel.title = ` ${ws.tree.branch} `;
+    this.setPanelTitle(this.detailPanel, ` ${ws.tree.branch} `);
     this.details.content = `${ws.tree.path}\n${ws.status}`;
     this.command.content = command || "No server command yet";
     const keys = new Set(ws.ports.map((port) => `${port.pid}:${port.port}`));
@@ -442,7 +464,7 @@ export class WorktreeApp {
           height: 1,
           focusable: true,
           onMouseUp: (event) => {
-            if (event.button === 0 && !this.modal) {
+            if (event.button === 0 && !this.modal && !this.isTextDrag()) {
               this.selection = key;
               void this.updateDetails().catch((error) => this.report(error));
             }
@@ -458,7 +480,7 @@ export class WorktreeApp {
       ? " Select a port, then Browser "
       : " No listening TCP ports ";
     this.updateButtons();
-    this.logPanel.title = ` SERVER OUTPUT / ${ws.tree.branch} `;
+    this.setPanelTitle(this.logPanel, ` SERVER OUTPUT / ${ws.tree.branch} `);
     if (logs !== this.logContent) {
       this.logText.content = stripVTControlCharacters(logs);
       if (!this.logContent) this.logPanel.scrollTo(999999);
@@ -479,7 +501,28 @@ export class WorktreeApp {
     this.enable("copy", !this.busy && Boolean(ws?.ports.length));
   }
 
+  private isTextDrag(): boolean {
+    const selection = this.renderer.getSelection();
+    return Boolean(
+      selection?.isDragging &&
+        (selection.anchor.x !== selection.focus.x ||
+          selection.anchor.y !== selection.focus.y ||
+          selection.behavior !== "cell"),
+    );
+  }
+
   private onKey(key: KeyEvent): void {
+    if ((key.ctrl && key.name === "y") || (key.meta && key.name === "c")) {
+      const text = this.renderer.getSelection()?.getSelectedText();
+      if (text) {
+        key.preventDefault();
+        key.stopPropagation();
+        this.status.content = this.renderer.copyToClipboardOSC52(text)
+          ? "Selected text copied"
+          : "Clipboard unavailable";
+        return;
+      }
+    }
     if (key.name === "tab") {
       key.preventDefault();
       this.modal?.closeDropdown?.();
@@ -570,6 +613,9 @@ export class WorktreeApp {
       content: "",
       fg: color.error,
       height: 2,
+      selectable: true,
+      selectionBg: color.accent,
+      selectionFg: color.bg,
     });
     const dialog: Dialog = {
       kind,
@@ -714,7 +760,7 @@ export class WorktreeApp {
         const row = this.box(choices, `base-branch:${branch.ref}`, {
           height: 1,
           onMouseUp: (event) => {
-            if (event.button === 0) pick(index);
+            if (event.button === 0 && !this.isTextDrag()) pick(index);
           },
         });
         const source =
