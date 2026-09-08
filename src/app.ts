@@ -9,9 +9,10 @@ import {
   ScrollBoxRenderable,
   TextRenderable,
 } from "@opentui/core";
-import type { BranchRef } from "./git.ts";
-import type { Manager } from "./manager.ts";
+import { type BranchRef, Repository } from "./git.ts";
+import { Manager } from "./manager.ts";
 import { portUrl } from "./process-info.ts";
+import { type Project, Projects } from "./projects.ts";
 import { sleep } from "./system.ts";
 import { errorMessage, type Workspace } from "./types.ts";
 
@@ -35,7 +36,7 @@ interface Button {
 }
 
 interface Dialog {
-  kind: "add" | "run" | "remove";
+  kind: "add" | "run" | "remove" | "project-add";
   overlay: BoxRenderable;
   panel: BoxRenderable;
   fields: Map<string, InputRenderable>;
@@ -46,6 +47,10 @@ interface Dialog {
 }
 
 export class WorktreeApp {
+  projects: Project[] = [];
+  private service?: Manager;
+  private registry: Projects;
+  private repoLabel: TextRenderable;
   workspaces: Workspace[] = [];
   selected: string;
   busy = false;
@@ -58,6 +63,8 @@ export class WorktreeApp {
   private root: BoxRenderable;
   private content: ScrollBoxRenderable;
   private body: BoxRenderable;
+  private projectPanel: BoxRenderable;
+  private projectList: ScrollBoxRenderable;
   private treePanel: BoxRenderable;
   private detailPanel: BoxRenderable;
   private treeList: ScrollBoxRenderable;
@@ -77,10 +84,13 @@ export class WorktreeApp {
   private resizeHandler = () => this.layout();
 
   constructor(
-    readonly manager: Manager,
+    manager: Manager | undefined,
     readonly renderer: CliRenderer,
+    registry = new Projects(manager?.repo.worktreeDirectory),
   ) {
-    this.selected = manager.repo.root;
+    this.service = manager;
+    this.registry = registry;
+    this.selected = manager?.repo.root ?? "";
     this.root = new BoxRenderable(renderer, {
       id: "app",
       width: "100%",
@@ -94,7 +104,9 @@ export class WorktreeApp {
       backgroundColor: color.panel,
       paddingX: 2,
     });
-    this.text(masthead, "repo", manager.repo.root, { fg: color.muted });
+    this.repoLabel = this.text(masthead, "repo", manager?.repo.root ?? "No project selected", {
+      fg: color.muted,
+    });
     const toolbar = this.box(this.root, "toolbar", {
       height: 3,
       flexDirection: "row",
@@ -127,6 +139,23 @@ export class WorktreeApp {
     });
     this.root.add(this.content);
     this.body = this.box(this.content, "body", { flexDirection: "row", height: 20, gap: 1 });
+    this.projectPanel = this.panel(this.body, "project-panel", " PROJECTS ", { width: 28 });
+    this.button(
+      this.projectPanel,
+      "project-add",
+      "+ Add project",
+      () => this.openProjectAdd(),
+      false,
+      18,
+    );
+    this.projectList = new ScrollBoxRenderable(renderer, {
+      id: "project-list",
+      flexGrow: 1,
+      minHeight: 3,
+      scrollX: false,
+    });
+    this.projectPanel.add(this.projectList);
+    this.focus.push(this.projectList);
     this.treePanel = this.panel(this.body, "tree-panel", " WORKTREES ", {
       flexGrow: 1,
       flexBasis: 0,
@@ -200,7 +229,7 @@ export class WorktreeApp {
     this.text(
       this.root,
       "footer",
-      " n New   r Run   s Stop   o Browser   e Editor   F5 Refresh   q Quit   Tab Navigate   Ctrl+Y Copy ",
+      " p Projects   n New   r Run   s Stop   o Browser   e Editor   F5 Refresh   q Quit   Tab Navigate   Ctrl+Y Copy ",
       { height: 1, bg: color.raised, fg: color.accent },
     );
     renderer.keyInput.on("keypress", this.keyHandler);
@@ -214,8 +243,37 @@ export class WorktreeApp {
     return this.workspaces.find((ws) => ws.tree.path === this.selected);
   }
 
+  get manager(): Manager {
+    if (!this.service) throw new Error("Add a project first.");
+    return this.service;
+  }
+
   async start(): Promise<void> {
+    let projectError: unknown;
+    try {
+      this.projects = this.service
+        ? await this.registry.add(this.service.repo)
+        : await this.registry.list();
+      if (!this.service) {
+        for (const project of this.projects) {
+          try {
+            this.service = new Manager(
+              await Repository.open(project.path, this.registry.directory),
+            );
+            this.selected = this.service.repo.root;
+            this.repoLabel.content = this.service.repo.root;
+            break;
+          } catch {
+            /* Keep missing projects listed so their paths remain visible. */
+          }
+        }
+      }
+    } catch (error) {
+      projectError = error;
+    }
+    this.renderProjects();
     await this.refresh();
+    if (projectError) this.report(projectError);
     this.timer = setInterval(() => {
       void this.refresh();
     }, 2000);
@@ -356,9 +414,11 @@ export class WorktreeApp {
   }
 
   private layout(): void {
-    const narrow = this.renderer.width < 95;
+    const narrow = this.renderer.width < 110;
     this.body.flexDirection = narrow ? "column" : "row";
-    this.body.height = narrow ? 30 : Math.max(18, this.renderer.height - 18);
+    this.body.height = narrow ? 41 : Math.max(18, this.renderer.height - 18);
+    this.projectPanel.width = narrow ? "100%" : 28;
+    this.projectPanel.height = narrow ? 10 : "100%";
     this.treePanel.height = narrow ? 10 : "100%";
     this.detailPanel.height = narrow ? 19 : "100%";
     this.treePanel.flexBasis = narrow ? undefined : 0;
@@ -376,13 +436,21 @@ export class WorktreeApp {
   async refresh(force = false): Promise<void> {
     if (this.refreshing || (this.busy && !force) || this.modal || this.disposed) return;
     this.refreshing = true;
+    const service = this.service;
     try {
-      const snapshot = await this.manager.snapshot();
-      if (this.disposed || this.modal || (this.busy && !force)) return;
+      if (!service) {
+        this.summary.content = "No project selected";
+        this.status.content = "Click + Add project to register a local Git repository.";
+        this.updateButtons();
+        return;
+      }
+      const snapshot = await service.snapshot();
+      if (service !== this.service || this.disposed || this.modal || (this.busy && !force)) return;
       this.workspaces = snapshot.worktrees;
       if (!this.current) this.selected = this.workspaces[0]?.tree.path ?? "";
       this.renderTrees();
       await this.updateDetails();
+      if (service !== this.service) return;
       const running = this.workspaces.filter((ws) => ws.running).length;
       const ports = new Set(this.workspaces.flatMap((ws) => ws.ports.map((port) => port.port)))
         .size;
@@ -490,7 +558,11 @@ export class WorktreeApp {
 
   private updateButtons(): void {
     const ws = this.current;
-    for (const id of ["add", "refresh", "quit", "editor", "terminal"]) this.enable(id, !this.busy);
+    for (const id of ["project-add", "quit"]) this.enable(id, !this.busy);
+    for (const project of this.projects)
+      this.enable(`project-choice:${project.commonDir}`, !this.busy);
+    for (const id of ["add", "refresh"]) this.enable(id, !this.busy && Boolean(this.service));
+    for (const id of ["editor", "terminal"]) this.enable(id, !this.busy && Boolean(ws));
     this.enable("run", !this.busy && Boolean(ws && !ws.running && !ws.tree.prunable));
     this.enable("stop", !this.busy && Boolean(ws?.running));
     this.enable(
@@ -571,6 +643,7 @@ export class WorktreeApp {
       return;
     }
     const actions: Record<string, () => void> = {
+      p: () => this.openProjects(),
       n: () => this.openAdd(),
       r: () => {
         void this.openRun();
@@ -668,8 +741,117 @@ export class WorktreeApp {
     this.treeList.focus();
   }
 
-  openAdd(): void {
+  openProjects(): void {
     if (this.busy || this.modal) return;
+    this.content.scrollChildIntoView(this.body.id);
+    const active = this.buttons.get(`project-choice:${this.service?.repo.commonDir}`);
+    (active?.box ?? this.buttons.get("project-add")?.box)?.focus();
+  }
+
+  private renderProjects(): void {
+    this.focus = this.focus.filter((item) => !item.id.startsWith("project-choice:"));
+    for (const child of this.projectList.getChildren()) {
+      this.buttons.delete(child.id);
+      child.destroyRecursively();
+    }
+    this.setPanelTitle(this.projectPanel, ` PROJECTS (${this.projects.length}) `);
+    for (const project of this.projects) {
+      const active = project.commonDir === this.service?.repo.commonDir;
+      const button = this.button(
+        this.projectList,
+        `project-choice:${project.commonDir}`,
+        `${active ? "● " : ""}${project.name}\n${project.path}`,
+        () => {
+          void this.selectProject(project.path);
+        },
+        false,
+        undefined,
+      );
+      button.flexGrow = 0;
+      button.flexBasis = "auto";
+      button.height = 4;
+      const label = this.buttons.get(button.id)?.text;
+      if (label) {
+        label.width = "100%";
+        label.height = 2;
+        label.wrapMode = "none";
+        label.truncate = true;
+      }
+      button.backgroundColor = active ? color.selected : color.raised;
+      button.borderColor = active ? color.accent : color.line;
+      button.on("focused", () => this.projectList.scrollChildIntoView(button.id));
+    }
+    if (!this.projects.length)
+      this.text(
+        this.projectList,
+        "projects-empty",
+        "No projects yet.\nAdd a local Git repository.",
+      );
+  }
+
+  openProjectAdd(): void {
+    if (this.busy || this.modal) return;
+    const dialog = this.createDialog("project-add", "Add project", 12);
+    const path = this.field(
+      dialog,
+      "project-path",
+      "Local Git repository path",
+      "",
+      "~/code/my-project",
+    );
+    this.text(
+      dialog.panel,
+      "project-hint",
+      "Register an existing repository. Its files stay in place.",
+      { height: 2, fg: color.muted },
+    );
+    dialog.submit = () => {
+      if (!path.value.trim()) {
+        dialog.error.content = "Enter a repository path.";
+        return;
+      }
+      void this.selectProject(path.value.trim(), dialog);
+    };
+    this.dialogActions(dialog, "Add & switch");
+  }
+
+  private async selectProject(path: string, dialog?: Dialog): Promise<void> {
+    if (this.busy || this.disposed) return;
+    this.busy = true;
+    this.updateButtons();
+    try {
+      const service = new Manager(await Repository.open(path, this.registry.directory));
+      const snapshot = await service.snapshot();
+      if (this.disposed || this.modal !== dialog) return;
+      const projects = await this.registry.add(service.repo);
+      if (this.disposed || this.modal !== dialog) return;
+      this.projects = projects;
+      this.service = service;
+      this.detailRevision++;
+      this.workspaces = snapshot.worktrees;
+      this.selected = service.repo.root;
+      this.selection = undefined;
+      this.logContent = "";
+      this.logText.content = "Run a server to see its output here.";
+      this.repoLabel.content = service.repo.root;
+      this.renderProjects();
+      this.closeModal();
+      this.renderTrees();
+      await this.updateDetails();
+      this.summary.content = `${this.workspaces.length} trees`;
+      this.status.content =
+        snapshot.warning || "Project switched · Other projects' servers keep running";
+    } catch (error) {
+      if (dialog && this.modal === dialog) dialog.error.content = errorMessage(error);
+      else this.report(error);
+    } finally {
+      this.busy = false;
+      this.updateButtons();
+    }
+  }
+
+  openAdd(): void {
+    if (this.busy || this.modal || !this.service) return;
     const dialog = this.createDialog("add", "New worktree", 24);
     const branch = this.field(dialog, "branch", "Branch", "", "feature/login");
     const path = this.field(
@@ -871,7 +1053,7 @@ export class WorktreeApp {
     if (!ws || ws.running || this.busy || this.modal) return;
     try {
       const defaultCommand = ws.run?.command || (await this.manager.defaultCommand(ws.tree));
-      if (this.modal || this.busy || this.disposed) return;
+      if (this.current !== ws || this.modal || this.busy || this.disposed) return;
       const dialog = this.createDialog("run", "Run development server", 17);
       this.text(dialog.panel, "run-branch", ws.tree.branch, { height: 1, fg: color.accent });
       const command = this.field(

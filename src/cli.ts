@@ -93,7 +93,17 @@ export async function main(argv = process.argv): Promise<number> {
   program.action(async () => {
     if (!process.stdin.isTTY || !process.stdout.isTTY)
       throw new WorktreeError("Open wt in an interactive terminal, or use 'wt list --json'.");
-    const service = await manager();
+    let service: Manager | undefined;
+    try {
+      service = await manager();
+    } catch (error) {
+      if (
+        program.getOptionValueSource("repo") !== "default" ||
+        !["darwin", "linux"].includes(process.platform)
+      )
+        throw error;
+      // Outside a repository, open saved projects or the empty project picker.
+    }
     const [{ createCliRenderer }, { WorktreeApp }] = await Promise.all([
       import("@opentui/core"),
       import("./app.ts"),

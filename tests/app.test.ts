@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import { InputRenderable, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { WorktreeApp } from "../src/app.ts";
+import { Projects } from "../src/projects.ts";
 import { eventually, fixture, freePort, seedBaseBranches, serverCommand } from "./helpers.ts";
 
 let context: Awaited<ReturnType<typeof fixture>>;
@@ -261,4 +263,92 @@ test("dragging a worktree label does not change the selected worktree", async ()
   terminal.renderer.clearSelection();
   await click(`tree:${tree.path}`);
   expect(app.current?.tree.branch).toBe("feature/selection");
+});
+
+test("projects remain visible beside worktrees and stack above them in a narrow terminal", async () => {
+  expect(element("project-panel").x).toBeLessThan(element("tree-panel").x);
+  expect(element("project-panel").y).toBe(element("tree-panel").y);
+  expect(element("tree-panel").y).toBe(element("detail-panel").y);
+  expect(terminal.captureCharFrame()).toContain("PROJECTS (1)");
+  terminal.mockInput.pressKey("p");
+  expect(app.modal).toBeUndefined();
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe(
+    `project-choice:${context.repo.commonDir}`,
+  );
+  terminal.resize(80, 24);
+  await terminal.renderOnce();
+  expect(element("project-panel").y + element("project-panel").height).toBeLessThan(
+    element("tree-panel").y,
+  );
+  expect(element("tree-panel").y + element("tree-panel").height).toBeLessThan(
+    element("detail-panel").y,
+  );
+  await click("project-add");
+  expect(app.modal?.kind).toBe("project-add");
+});
+
+test("projects can be added, switched, and used to create worktrees without stopping servers", async () => {
+  const otherPath = join(context.directory, "other-project");
+  await context.repo.git(["clone", "--", context.repo.root, otherPath]);
+  await context.manager.start(await context.repo.find(), serverCommand(freePort()));
+  await click("project-add");
+  fill("project-path", otherPath);
+  await click("submit");
+  await idle(() => !app.modal && app.manager.repo.root === otherPath);
+  expect(app.projects).toHaveLength(2);
+  expect(app.current?.running).toBe(false);
+  await click("add");
+  fill("branch", "feature/other-project");
+  await click("submit");
+  await idle(() => app.workspaces.length === 2);
+  expect(await context.repo.list()).toHaveLength(1);
+  expect(app.current?.tree.path).toContain("other-project/feature--other-project");
+  const oldSnapshot = await app.manager.snapshot();
+  let releaseSnapshot: (snapshot: typeof oldSnapshot) => void = () => {};
+  app.manager.snapshot = () =>
+    new Promise((resolve) => {
+      releaseSnapshot = resolve;
+    });
+  const pendingRefresh = app.refresh();
+  await click(`project-choice:${context.repo.commonDir}`);
+  await idle(() => !app.modal && app.manager.repo.commonDir === context.repo.commonDir);
+  releaseSnapshot(oldSnapshot);
+  await pendingRefresh;
+  expect(app.workspaces).toHaveLength(1);
+  expect(app.current?.running).toBe(true);
+  expect(await new Projects(context.repo.worktreeDirectory).list()).toHaveLength(2);
+});
+
+test("invalid project paths keep the active project and show an error", async () => {
+  await click("project-add");
+  fill("project-path", context.directory);
+  await click("submit");
+  await idle(() => terminal.captureCharFrame().includes("not a git repository"));
+  expect(app.modal?.kind).toBe("project-add");
+  expect(app.manager).toBe(context.manager);
+  expect(app.projects).toHaveLength(1);
+  await click("cancel");
+});
+
+test("an empty app can register its first project and restore it after restart", async () => {
+  app.dispose();
+  terminal.renderer.destroy();
+  const projects = new Projects(join(context.directory, "empty-projects"));
+  terminal = await createTestRenderer({ width: 80, height: 24 });
+  app = new WorktreeApp(undefined, terminal.renderer, projects);
+  await app.start();
+  await terminal.renderOnce();
+  expect(terminal.captureCharFrame()).toContain("No project selected");
+  await click("project-add");
+  fill("project-path", context.repo.root);
+  await click("submit");
+  await idle(() => !app.modal && app.workspaces.length === 1);
+  expect(app.manager.repo.commonDir).toBe(context.repo.commonDir);
+  app.dispose();
+  terminal.renderer.destroy();
+  terminal = await createTestRenderer({ width: 120, height: 38 });
+  app = new WorktreeApp(undefined, terminal.renderer, new Projects(projects.directory));
+  await app.start();
+  expect(app.manager.repo.commonDir).toBe(context.repo.commonDir);
+  expect(app.projects).toHaveLength(1);
 });
