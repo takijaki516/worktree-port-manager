@@ -287,13 +287,35 @@ PATH에서 Bun과 Node를 제외하여 확인합니다.
 포트 충돌, 재연결, PID 재사용 보호, 다중 프로세스 종료, 동시 실행 잠금, 이전 상태 읽기를 검증합니다.
 OpenTUI 테스트 렌더러로 마우스 생성·삭제·실행·종료와 작은 화면의 키보드 입력도 검증합니다.
 
+구조와 기능별 수정 위치, 유지해야 할 동작 규칙은 [CONTEXT.md](CONTEXT.md)에 정리했습니다.
+이전 체크아웃과 화면을 비교하려면 같은 버전의 의존성을 준비한 뒤 다음 명령을 실행합니다:
+
+```sh
+bun scripts/verify-ui-compatibility.ts /path/to/previous-checkout/src/app.ts
+```
+
+두 버전을 동일한 임시 저장소에서 실행하여 5가지 터미널 크기의 문자·색상·커서·포커스·선택 상태를
+비교합니다. 일반 테스트는 이전 체크아웃 없이 `bun run test`로 실행합니다.
+
 ```text
 src/
-  app.ts              # TUI와 입력 처리
+  app.ts              # TUI 조립, 프로젝트 선택과 작업 실행 흐름
+  ui/
+    controls.ts       # 공통 렌더링, 버튼 활성화와 포커스 등록
+    dialogs.ts        # 입력창 수명, 필드 검증과 제출
+    branch-picker.ts  # 브랜치 검색, 선택과 기존 브랜치 모드
+    project-navigator.ts # 프로젝트와 worktree 행, 접기·펼치기와 탐색
+    project-tooltip.ts # 잘린 텍스트의 툴팁
+    notifications.ts  # 알림 우선순위, 표시 시간과 정리
+    theme.ts          # 공통 색상
   cli.ts              # wt 진입점과 CLI
   git.ts              # Git worktree 조작
-  manager.ts          # 서버 관리와 worktree/포트 연결
+  manager.ts          # 작업 검증과 잠금 안에서의 상태 변경
+  managed-run.ts      # 감독 프로세스 실행·종료 프로토콜과 로그 읽기
+  workspace-snapshot.ts # worktree, 실행 기록, 프로세스와 포트 집계
+  desktop.ts          # Codex·에디터·터미널·브라우저 실행
   process-info.ts     # ps, lsof와 프로세스 식별
+  projects.ts         # 프로젝트 등록 목록 저장
   store.ts            # 상태 저장과 잠금
   supervisor.ts       # 분리된 서버 실행·종료
   standalone.ts       # 단일 바이너리 진입점과 감독 프로세스 실행
