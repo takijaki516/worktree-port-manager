@@ -123,6 +123,22 @@ worktree를 선택하고 상세 패널의 **Open in Codex**를 누르면 해당 
 선택한 텍스트는 `⌘C`로 복사합니다. 복사는 터미널의 OSC 52 클립보드 지원이 필요합니다.
 버튼이나 목록의 글자를 드래그하는 동안에는 해당 동작을 실행하지 않습니다.
 
+macOS의 Ghostty에서는 전용 실행 스크립트로 열면 `⌘C`로 TUI에서 선택한 텍스트를 복사할 수 있습니다.
+
+```sh
+bun run ghostty
+bun run ghostty -C /path/to/your-project
+```
+
+스크립트는 별도의 Ghostty 인스턴스에 복사·붙여넣기 설정을 실행 옵션으로 전달하고 현재 소스의 TUI를 엽니다.
+사용자 Ghostty 설정 파일은 수정하지 않습니다. 설정은 전용 인스턴스 전체에 적용되므로 그 안에 새로 만든
+탭에도 적용됩니다. 일반 Ghostty 인스턴스에는 영향을 주지 않습니다.
+Ghostty 자체의 선택 영역은 Ghostty가 복사하고, 선택 영역이 없으면 `⌘C`를 TUI에 전달합니다.
+`⌘V`는 입력칸에 초점을 둔 상태에서 사용합니다.
+키 전달 방식은 [Ghostty의 performable 설정](https://ghostty.org/docs/config/keybind#performable)을 참고하세요.
+기존 공통 설정에 이 TUI를 위해 추가한 `performable:super+c` 또는 `super+c=text:\x19`가 있다면 제거하고
+`⌘⇧,`로 설정을 다시 불러오세요. 기존 창에서 `bun run dev`로 실행하면 전용 설정은 적용되지 않습니다.
+
 | 키 | 동작 |
 | --- | --- |
 | `↑` / `↓` | worktree 또는 포트 선택 |
