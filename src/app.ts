@@ -4,15 +4,18 @@ import {
   InputRenderable,
   InputRenderableEvents,
   type KeyEvent,
+  type OptimizedBuffer,
   type Renderable,
   ScrollBoxRenderable,
   TextRenderable,
 } from "@opentui/core";
+import { EndTruncatedText } from "./end-truncated-text.ts";
 import { chooseFolder } from "./folder-picker.ts";
 import { type BranchRef, Repository } from "./git.ts";
 import { Manager } from "./manager.ts";
 import { portUrl } from "./process-info.ts";
 import { type Project, Projects } from "./projects.ts";
+import { ResizePointer } from "./resize-pointer.ts";
 import { sleep } from "./system.ts";
 import { errorMessage, type Workspace } from "./types.ts";
 
@@ -20,6 +23,8 @@ const color = {
   bg: "#282C34",
   panel: "#23272F",
   raised: "#343A46",
+  tooltip: "#F3DFA2",
+  tooltipText: "#302719",
   line: "#626C7D",
   text: "#F0F2F5",
   muted: "#B6BFCE",
@@ -28,6 +33,15 @@ const color = {
   overlay: "#1D2026",
   error: "#ff938f",
 };
+
+// Draw over the label without intercepting its hover, selection, or click events.
+class TooltipText extends TextRenderable {
+  override render(buffer: OptimizedBuffer): void {
+    if (!this.visible) return;
+    this.markClean();
+    this.renderSelf(buffer);
+  }
+}
 
 interface Button {
   box: BoxRenderable;
@@ -64,6 +78,11 @@ export class WorktreeApp {
   private content: ScrollBoxRenderable;
   private body: BoxRenderable;
   private projectPanel: BoxRenderable;
+  private splitDragOverlay: BoxRenderable;
+  private projectTooltip: TextRenderable;
+  private projectRatio = 0.5;
+  private resizingPanels = false;
+  private resizePointer: ResizePointer;
   private projectList: ScrollBoxRenderable;
   private treeContainer?: BoxRenderable;
   private projectExpanded = true;
@@ -83,7 +102,10 @@ export class WorktreeApp {
   private portRows = new Map<string, { box: BoxRenderable; text: TextRenderable }>();
   private focus: Renderable[] = [];
   private keyHandler = (key: KeyEvent) => this.onKey(key);
-  private resizeHandler = () => this.layout();
+  private resizeHandler = () => {
+    this.projectTooltip.visible = false;
+    this.layout();
+  };
 
   constructor(
     manager: Manager | undefined,
@@ -93,6 +115,7 @@ export class WorktreeApp {
       | (() => Promise<string | undefined>)
       | undefined = process.platform === "darwin" ? chooseFolder : undefined,
   ) {
+    this.resizePointer = new ResizePointer(renderer);
     this.service = manager;
     this.registry = registry;
     this.selected = manager?.repo.root ?? "";
@@ -118,12 +141,49 @@ export class WorktreeApp {
     });
     this.projectList = new ScrollBoxRenderable(renderer, {
       id: "project-list",
+      width: "100%",
+      minWidth: 0,
+      overflow: "hidden",
+      onMouseScroll: () => {
+        this.projectTooltip.visible = false;
+      },
       flexGrow: 1,
       minHeight: 3,
       scrollX: false,
     });
     this.projectPanel.add(this.projectList);
     this.focus.push(this.projectList);
+    this.projectPanel.onMouseDown = (event) => {
+      if (
+        event.button !== 0 ||
+        this.modal ||
+        this.renderer.width < 95 ||
+        event.x !== this.projectPanel.x + this.projectPanel.width - 1
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.projectTooltip.visible = false;
+      this.resizingPanels = true;
+      this.splitDragOverlay.visible = true;
+      this.projectPanel.borderColor = color.accent;
+      this.resizePointer.set(true);
+    };
+    this.projectPanel.onMouseMove = (event) => {
+      if (this.resizingPanels) return;
+      const draggable =
+        !this.modal &&
+        this.renderer.width >= 95 &&
+        event.x === this.projectPanel.x + this.projectPanel.width - 1;
+      this.projectPanel.borderColor = draggable ? color.accent : color.line;
+      this.resizePointer.set(draggable);
+    };
+    this.projectPanel.onMouseOut = () => {
+      if (!this.resizingPanels) {
+        this.projectPanel.borderColor = color.line;
+        this.resizePointer.set(false);
+      }
+    };
     this.detailPanel = this.panel(this.body, "detail-panel", " SELECT A WORKTREE ", {
       flexGrow: 1,
       flexBasis: 0,
@@ -218,6 +278,46 @@ export class WorktreeApp {
       wrapMode: "word",
       visible: false,
     });
+    this.projectTooltip = new TooltipText(this.renderer, {
+      id: "project-tooltip",
+      content: "",
+      position: "absolute",
+      zIndex: 95,
+      visible: false,
+      selectable: false,
+      bg: color.tooltip,
+      fg: color.tooltipText,
+      wrapMode: "char",
+    });
+    this.root.add(this.projectTooltip);
+    // Capture the first movement even when it skips the one-cell panel border.
+    this.splitDragOverlay = this.box(this.root, "panel-split-drag", {
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      zIndex: 100,
+      visible: false,
+      onMouseDrag: (event) => {
+        if (!this.splitDragOverlay.visible || event.button !== 0) return;
+        event.stopPropagation();
+        const available = this.body.width;
+        this.projectRatio =
+          this.clampProjectWidth(event.x - this.body.x + 1, available) / available;
+        this.layout();
+      },
+      onMouseUp: (event) => {
+        event.stopPropagation();
+        this.splitDragOverlay.visible = false;
+        this.projectPanel.borderColor = color.line;
+        this.resizePointer.set(false);
+        // OpenTUI also dispatches mouse-up to the element beneath its drag capture.
+        queueMicrotask(() => {
+          this.resizingPanels = false;
+        });
+      },
+    });
     renderer.keyInput.on("keypress", this.keyHandler);
     renderer.on("resize", this.resizeHandler);
     renderer.once("destroy", () => this.dispose());
@@ -267,6 +367,7 @@ export class WorktreeApp {
 
   dispose(): void {
     if (this.disposed) return;
+    this.resizePointer.set(false);
     this.disposed = true;
     clearInterval(this.timer);
     clearTimeout(this.toastTimer);
@@ -332,7 +433,7 @@ export class WorktreeApp {
     content: string,
     options: Partial<ConstructorParameters<typeof TextRenderable>[1]> = {},
   ) {
-    const text = new TextRenderable(this.renderer, {
+    const text = new EndTruncatedText(this.renderer, {
       id,
       content,
       fg: color.text,
@@ -343,6 +444,7 @@ export class WorktreeApp {
       ...options,
     });
     parent.add(text);
+    if (id === "project-panel-title") this.attachProjectTooltip(text);
     return text;
   }
 
@@ -375,7 +477,7 @@ export class WorktreeApp {
       alignItems: "center",
       justifyContent: "center",
       onMouseUp: (event) => {
-        if (event.button === 0 && !this.isTextDrag()) invoke();
+        if (event.button === 0 && !this.isMouseDrag()) invoke();
       },
       onKeyDown: (key) => {
         if (key.name === "return" || key.name === "space") {
@@ -405,9 +507,47 @@ export class WorktreeApp {
     button.box.opacity = enabled ? 1 : 0.4;
   }
 
+  private attachProjectTooltip(text: TextRenderable, content = () => text.plainText.trim()): void {
+    const show = () => {
+      if (this.modal || this.isMouseDrag() || Bun.stringWidth(text.plainText) <= text.width) {
+        this.projectTooltip.visible = false;
+        return;
+      }
+      const value = content();
+      const fullWidth = Bun.stringWidth(value);
+      const left = Math.max(0, Math.min(text.x, this.renderer.width - 1));
+      const width = Math.min(fullWidth, this.renderer.width - left);
+      this.projectTooltip.content = value;
+      this.projectTooltip.width = width;
+      this.projectTooltip.left = left;
+      const height = Math.ceil(fullWidth / Math.max(1, width));
+      this.projectTooltip.top = Math.max(0, Math.min(text.y, this.renderer.height - height));
+      this.projectTooltip.visible = true;
+    };
+    text.onMouseOver = show;
+    text.onMouseMove = show;
+    text.onMouseOut = () => {
+      this.projectTooltip.visible = false;
+    };
+    text.onMouseDown = () => {
+      this.projectTooltip.visible = false;
+    };
+  }
+
+  private clampProjectWidth(width: number, available: number): number {
+    return Math.max(2, Math.min(available - 44, Math.round(width)));
+  }
+
   private layout(): void {
     const narrow = this.renderer.width < 95;
     this.body.flexDirection = narrow ? "column" : "row";
+    this.body.gap = narrow ? 1 : 0;
+    if (narrow) {
+      this.resizingPanels = false;
+      this.resizePointer.set(false);
+      this.splitDragOverlay.visible = false;
+      this.projectPanel.borderColor = color.line;
+    }
     const detailHeight = Math.max(9, this.portList.height + 8);
     this.toast.width = Math.min(56, this.renderer.width);
     const projectHeight = Math.max(6, this.renderer.height - 2 - detailHeight);
@@ -417,7 +557,22 @@ export class WorktreeApp {
     );
     this.projectPanel.height = narrow ? projectHeight : "100%";
     this.detailPanel.height = narrow ? detailHeight : "100%";
-    this.projectPanel.flexBasis = narrow ? undefined : 0;
+    const available = this.renderer.width;
+    this.projectPanel.flexGrow = narrow ? 1 : 0;
+    this.projectPanel.flexShrink = narrow ? 1 : 0;
+    this.projectPanel.width = narrow
+      ? "100%"
+      : this.clampProjectWidth(available * this.projectRatio, available);
+    const title = this.projectPanel.findDescendantById("project-panel-title");
+    if (title instanceof TextRenderable) {
+      const width = narrow ? this.renderer.width : Number(this.projectPanel.width);
+      title.width = Math.max(0, width - 4);
+      title.maxWidth = Math.max(0, width - 4);
+      title.visible = width > 4;
+      title.wrapMode = "none";
+      title.truncate = true;
+    }
+    this.projectPanel.flexBasis = undefined;
     this.detailPanel.flexBasis = narrow ? undefined : 0;
     this.summary.visible = !narrow;
     if (this.modal) {
@@ -503,7 +658,7 @@ export class WorktreeApp {
           height: 1,
           focusable: true,
           onMouseUp: (event) => {
-            if (event.button === 0 && !this.busy && !this.modal && !this.isTextDrag())
+            if (event.button === 0 && !this.busy && !this.modal && !this.isMouseDrag())
               this.selectTree(ws.tree.path);
           },
           onKeyDown: (key) => {
@@ -526,6 +681,7 @@ export class WorktreeApp {
       const connector = ws === this.workspaces.at(-1) ? "└─" : "├─";
       const ports = [...new Set(ws.ports.map((port) => port.port))].join(", ");
       row.text.content = `${connector} ${ws.tree.branch}${flags} · ${ws.status}${ports ? ` · ${ports}` : ""}`;
+      this.attachProjectTooltip(row.text, () => ws.tree.branch);
       row.box.backgroundColor = ws.tree.path === this.selected ? color.selected : color.panel;
     }
   }
@@ -565,7 +721,7 @@ export class WorktreeApp {
           height: 1,
           focusable: true,
           onMouseUp: (event) => {
-            if (event.button === 0 && !this.modal && !this.isTextDrag()) {
+            if (event.button === 0 && !this.modal && !this.isMouseDrag()) {
               this.selection = key;
               void this.updateDetails().catch((error) => this.report(error));
             }
@@ -605,7 +761,8 @@ export class WorktreeApp {
     this.enable("copy", !this.busy && Boolean(ws?.ports.length));
   }
 
-  private isTextDrag(): boolean {
+  private isMouseDrag(): boolean {
+    if (this.resizingPanels) return true;
     const selection = this.renderer.getSelection();
     return Boolean(
       selection?.isDragging &&
@@ -698,6 +855,7 @@ export class WorktreeApp {
   }
 
   private createDialog(kind: Dialog["kind"], title: string, height: number): Dialog {
+    this.resizePointer.set(false);
     const overlay = this.box(this.root, "modal", {
       position: "absolute",
       top: 0,
@@ -792,6 +950,7 @@ export class WorktreeApp {
   }
 
   private renderProjects(): void {
+    this.projectTooltip.visible = false;
     this.focus = this.focus.filter((item) => !item.id.startsWith("project-choice:"));
     for (const id of this.buttons.keys()) {
       if (id.startsWith("project-choice:")) this.buttons.delete(id);
@@ -822,6 +981,8 @@ export class WorktreeApp {
       button.flexBasis = "auto";
       button.height = 1;
       button.width = "100%";
+      button.minWidth = 0;
+      button.overflow = "hidden";
       button.paddingLeft = 0;
       button.paddingRight = 0;
       button.border = false;
@@ -831,6 +992,7 @@ export class WorktreeApp {
         label.height = 1;
         label.wrapMode = "none";
         label.truncate = true;
+        this.attachProjectTooltip(label, () => project.name);
       }
       button.backgroundColor = active ? color.raised : color.panel;
       button.on("focused", () => {
@@ -1114,7 +1276,7 @@ export class WorktreeApp {
         const row = this.box(choices, `base-branch:${branch.ref}`, {
           height: 1,
           onMouseUp: (event) => {
-            if (event.button === 0 && !this.isTextDrag()) pick(index);
+            if (event.button === 0 && !this.isMouseDrag()) pick(index);
           },
         });
         const source =

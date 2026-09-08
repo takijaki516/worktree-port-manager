@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { InputRenderable, Renderable, ScrollBoxRenderable } from "@opentui/core";
+import { InputRenderable, Renderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { createMockKeys, createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { WorktreeApp } from "../src/app.ts";
 import { Projects } from "../src/projects.ts";
@@ -44,6 +44,146 @@ function fill(id: string, value: string) {
   if (!(node instanceof InputRenderable)) throw new Error(`Not an input: ${id}`);
   node.value = value;
 }
+
+async function dragPanelBorder(x: number) {
+  await terminal.renderOnce();
+  const panel = element("project-panel");
+  await terminal.mockMouse.pressDown(panel.x + panel.width - 1, panel.y + 10);
+  await terminal.renderOnce();
+  expect(element("panel-split-drag").visible).toBe(true);
+  await terminal.mockMouse.emitMouseEvent("drag", x, panel.y + 12);
+  await terminal.renderOnce();
+  await terminal.mockMouse.release(x, panel.y + 12);
+  await terminal.renderOnce();
+}
+
+test("draggable border changes the mouse pointer and restores it after leaving or dragging", async () => {
+  const pointer = spyOn(terminal.renderer, "setMousePointer");
+  try {
+    const panel = element("project-panel");
+    await terminal.mockMouse.moveTo(panel.x + panel.width - 1, panel.y + 10);
+    await terminal.renderOnce();
+    expect(pointer).toHaveBeenLastCalledWith("pointer");
+    await terminal.mockMouse.moveTo(110, 20);
+    await terminal.renderOnce();
+    expect(pointer).toHaveBeenLastCalledWith("default");
+    await dragPanelBorder(39);
+    expect(pointer).toHaveBeenLastCalledWith("default");
+    terminal.resize(80, 24);
+    await terminal.renderOnce();
+    await terminal.mockMouse.moveTo(79, 2);
+    expect(pointer).toHaveBeenLastCalledWith("default");
+  } finally {
+    pointer.mockRestore();
+  }
+});
+
+test("panel border resizes panels and releases without activating underlying controls", async () => {
+  await dragPanelBorder(39);
+  expect(element("project-panel").width).toBe(40);
+  expect(element("detail-panel").width).toBe(80);
+  expect(element("detail-panel").x).toBe(40);
+  expect(terminal.renderer.root.findDescendantById("panel-splitter")).toBeUndefined();
+  expect(element("panel-split-drag").visible).toBe(false);
+  expect(app.modal).toBeUndefined();
+  await terminal.mockMouse.moveTo(65, 8);
+  await terminal.renderOnce();
+  expect(element("project-panel").width).toBe(40);
+  await click("add");
+  expect(app.modal?.kind).toBe("add");
+});
+
+test("panel border clamps both panel widths and restores ratio after a narrow terminal", async () => {
+  await dragPanelBorder(0);
+  expect(element("project-panel").width).toBe(2);
+  await dragPanelBorder(119);
+  expect(element("detail-panel").width).toBe(44);
+  await dragPanelBorder(39);
+  terminal.resize(80, 24);
+  await terminal.renderOnce();
+  await terminal.mockMouse.pressDown(79, 2);
+  await terminal.renderOnce();
+  expect(element("panel-split-drag").visible).toBe(false);
+  await terminal.mockMouse.release(79, 2);
+  expect(element("project-panel").width).toBe(80);
+  expect(element("detail-panel").y).toBeGreaterThan(element("project-panel").y);
+  terminal.resize(160, 38);
+  await terminal.renderOnce();
+  expect(element("project-panel").width).toBe(Math.round((40 / 120) * 160));
+});
+
+test("releasing a panel border drag over a button does not click it", async () => {
+  const panel = element("project-panel");
+  await terminal.mockMouse.pressDown(panel.x + panel.width - 1, panel.y + 10);
+  await terminal.renderOnce();
+  const add = element("add");
+  await terminal.mockMouse.emitMouseEvent("drag", add.x + 2, add.y);
+  await terminal.renderOnce();
+  await terminal.mockMouse.release(add.x + 2, add.y);
+  await terminal.renderOnce();
+  expect(app.modal).toBeUndefined();
+  expect(element("panel-split-drag").visible).toBe(false);
+});
+
+test("narrow project labels stay clipped and reveal their full text on hover", async () => {
+  await dragPanelBorder(11);
+  const panel = element("project-panel");
+  expect(panel.width).toBe(12);
+  const label = element(`project-choice:${context.repo.commonDir}-label`);
+  expect(label.x + label.width).toBeLessThanOrEqual(panel.x + panel.width - 1);
+  await terminal.mockMouse.moveTo(label.x + 1, label.y);
+  await terminal.renderOnce();
+  const tooltip = element("project-tooltip");
+  expect(tooltip.visible).toBe(true);
+  expect("plainText" in tooltip && tooltip.plainText).toBe(app.projects[0]?.name);
+  expect(tooltip.width).toBeGreaterThan(label.width);
+  expect(tooltip.x).toBe(label.x);
+  expect(tooltip.y).toBe(label.y);
+  await terminal.mockMouse.moveTo(label.x + 2, label.y);
+  await terminal.renderOnce();
+  expect(tooltip.visible).toBe(true);
+  expect(terminal.renderer.hitTest(label.x + 2, label.y)).toBe(label.num);
+  expect(tooltip.x + tooltip.width).toBeLessThanOrEqual(120);
+  await app.refresh();
+  await terminal.renderOnce();
+  expect(tooltip.visible).toBe(true);
+  await terminal.mockMouse.moveTo(110, 20);
+  await terminal.renderOnce();
+  expect(tooltip.visible).toBe(false);
+
+  const tree = element(`tree-text:${context.repo.root}`);
+  await terminal.mockMouse.moveTo(tree.x + 1, tree.y);
+  await terminal.renderOnce();
+  expect(tooltip.visible).toBe(true);
+  expect("plainText" in tooltip && tooltip.plainText).toBe(app.current?.tree.branch);
+  await dragPanelBorder(75);
+  await terminal.mockMouse.moveTo(label.x + 1, label.y);
+  await terminal.renderOnce();
+  expect(tooltip.visible).toBe(false);
+});
+
+test("hover text wraps wide Unicode labels within the terminal", async () => {
+  await dragPanelBorder(11);
+  const label = element(`project-choice:${context.repo.commonDir}-label`);
+  expect(label).toBeInstanceOf(TextRenderable);
+  if (!(label instanceof TextRenderable)) return;
+  label.content = "긴프로젝트이름".repeat(15);
+  const project = app.projects[0];
+  if (!project) throw new Error("Missing project");
+  project.name = label.plainText;
+  await terminal.renderOnce();
+  await terminal.mockMouse.moveTo(label.x + 1, label.y);
+  await terminal.renderOnce();
+  const tooltip = element("project-tooltip");
+  expect(tooltip).toBeInstanceOf(TextRenderable);
+  if (!(tooltip instanceof TextRenderable)) return;
+  expect(tooltip.visible).toBe(true);
+  expect(tooltip.plainText).toBe(label.plainText);
+  expect(tooltip.x).toBe(label.x);
+  expect(tooltip.width).toBe(120 - label.x);
+  expect(tooltip.height).toBeGreaterThan(1);
+  expect(tooltip.y + tooltip.height).toBeLessThanOrEqual(38);
+});
 
 async function idle(predicate: () => boolean) {
   await eventually(async () => {
