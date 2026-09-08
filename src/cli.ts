@@ -110,6 +110,7 @@ export async function main(argv = process.argv): Promise<number> {
     ]);
     const renderer = await createCliRenderer({
       useMouse: true,
+      useKittyKeyboard: {},
       exitOnCtrlC: true,
       backgroundColor: "#10151d",
     });

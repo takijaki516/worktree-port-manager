@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { InputRenderable, Renderable, ScrollBoxRenderable } from "@opentui/core";
-import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { createMockKeys, createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { WorktreeApp } from "../src/app.ts";
 import { Projects } from "../src/projects.ts";
 import { eventually, fixture, freePort, seedBaseBranches, serverCommand } from "./helpers.ts";
@@ -243,6 +243,7 @@ test("existing branch mode disables and skips base selection", async () => {
 });
 
 test("mouse selects text and panel titles, and copies without activating buttons", async () => {
+  const keys = createMockKeys(terminal.renderer, { kittyKeyboard: true });
   const copied: string[] = [];
   terminal.renderer.copyToClipboardOSC52 = (text) => {
     copied.push(text);
@@ -255,7 +256,7 @@ test("mouse selects text and panel titles, and copies without activating buttons
     const selected = terminal.renderer.getSelection()?.getSelectedText();
     expect(selected?.trim().length).toBeGreaterThan(0);
     expect(app.modal).toBeUndefined();
-    terminal.mockInput.pressKey("y", { ctrl: true });
+    keys.pressKey("c", { super: true });
     expect(copied.at(-1)).toBe(selected);
     terminal.renderer.clearSelection();
   }
@@ -268,8 +269,39 @@ test("mouse selects text and panel titles, and copies without activating buttons
   const input = element("branch");
   await terminal.mockMouse.drag(input.x, input.y, input.x + 7, input.y);
   expect(terminal.renderer.getSelection()?.getSelectedText()).toContain("feature");
-  terminal.mockInput.pressKey("y", { ctrl: true });
+  keys.pressKey("c", { super: true });
   expect(copied.at(-1)).toContain("feature");
+});
+
+test("Ghostty Command+C copies TUI selection and bracketed paste stays in the input", async () => {
+  const keys = createMockKeys(terminal.renderer, { kittyKeyboard: true });
+  const copied: string[] = [];
+  terminal.renderer.copyToClipboardOSC52 = (text) => {
+    copied.push(text);
+    return true;
+  };
+  const title = element("project-panel-title");
+  await terminal.mockMouse.drag(title.x, title.y, title.x + 6, title.y);
+  const selected = terminal.renderer.getSelection()?.getSelectedText();
+  expect(selected?.trim().length).toBeGreaterThan(0);
+  keys.pressKey("c", { super: true });
+  expect(copied).toHaveLength(1);
+  expect(copied[0]).toBe(selected);
+  terminal.renderer.clearSelection();
+  keys.pressKey("n", { super: true });
+  expect(app.modal).toBeUndefined();
+  await click("add");
+  await keys.pasteBracketedText("feature/qnrs-붙여넣기");
+  const input = element("branch");
+  expect(input instanceof InputRenderable && input.value).toBe("feature/qnrs-붙여넣기");
+  expect(app.modal?.kind).toBe("add");
+  await terminal.renderOnce();
+  await terminal.mockMouse.drag(input.x, input.y, input.x + 7, input.y);
+  const selectedInput = terminal.renderer.getSelection()?.getSelectedText();
+  expect(selectedInput).toContain("feature");
+  keys.pressKey("c", { super: true });
+  expect(copied.at(-1)).toBe(selectedInput);
+  expect(input instanceof InputRenderable && input.value).toBe("feature/qnrs-붙여넣기");
 });
 
 test("dragging a worktree label does not change the selected worktree", async () => {

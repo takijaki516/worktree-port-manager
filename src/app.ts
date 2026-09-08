@@ -576,7 +576,7 @@ export class WorktreeApp {
   }
 
   private onKey(key: KeyEvent): void {
-    if ((key.ctrl && key.name === "y") || (key.meta && key.name === "c")) {
+    if ((key.super || key.meta) && key.name === "c") {
       const text = this.renderer.getSelection()?.getSelectedText();
       if (text) {
         key.preventDefault();
@@ -647,7 +647,7 @@ export class WorktreeApp {
       },
       q: () => this.quit(),
     };
-    if (!key.ctrl && !key.meta) actions[key.name]?.();
+    if (!key.ctrl && !key.meta && !key.super && !key.hyper) actions[key.name]?.();
   }
 
   private createDialog(kind: Dialog["kind"], title: string, height: number): Dialog {
