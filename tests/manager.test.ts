@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Manager } from "../src/manager.ts";
 import { isLive, parseListeners, portUrl, processTable } from "../src/process-info.ts";
@@ -14,6 +14,32 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await context.cleanup();
+});
+
+test("Codex receives the exact selected path and reports launch failures", async () => {
+  const tree = await context.repo.create({
+    branch: "codex",
+    path: join(context.directory, "worktree ' $() with spaces"),
+  });
+  const executable = join(context.directory, "codex");
+  await writeFile(executable, '#!/bin/sh\nprintf "%s\\n" "$@" > "$0.args"\n');
+  await chmod(executable, 0o755);
+  const originalPath = process.env.PATH;
+  try {
+    process.env.PATH = context.directory;
+    await context.manager.openCodex(tree);
+    expect(await readFile(`${executable}.args`, "utf8")).toBe(`app\n${tree.path}\n`);
+    await writeFile(executable, '#!/bin/sh\nprintf "desktop launch failed" >&2\nexit 7\n');
+    await expect(context.manager.openCodex(tree)).rejects.toThrow("desktop launch failed");
+    await rm(executable);
+    await expect(context.manager.openCodex(tree)).rejects.toThrow("Codex CLI not found");
+    await expect(
+      context.manager.openCodex({ ...tree, path: join(context.directory, "missing") }),
+    ).rejects.toThrow("directory is missing");
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
 });
 
 test("managed ports survive reconnect, protect deletion, and close on stop", async () => {

@@ -96,6 +96,26 @@ test("mouse starts a server, displays a live port, opens selected URL, and stops
   expect(app.current?.ports).toHaveLength(0);
 });
 
+test("Open in Codex uses the selected worktree and displays launcher errors", async () => {
+  const tree = await context.repo.create({ branch: "open-codex" });
+  await app.refresh();
+  await click(`tree:${tree.path}`);
+  const opened: string[] = [];
+  context.manager.openCodex = async (selected) => {
+    opened.push(selected.path);
+  };
+  await click("codex");
+  await idle(() => opened.length === 1);
+  expect(opened).toEqual([tree.path]);
+  expect(terminal.captureCharFrame()).toContain("Opened in Codex");
+  context.manager.openCodex = async () => {
+    throw new Error("Codex CLI not found");
+  };
+  element("codex").focus();
+  terminal.mockInput.pressEnter();
+  await idle(() => terminal.captureCharFrame().includes("Codex CLI not found"));
+});
+
 test("small terminal keeps input isolated from shortcuts and supports Tab and mouse scrolling", async () => {
   terminal.resize(80, 24);
   await terminal.renderOnce();

@@ -101,6 +101,9 @@ macOS에서는 **+ Add project → Choose folder…**로 기본 폴더 선택 �
 종료하지 않으며, worktree 생성·삭제 및 서버 동작은 화면에서 선택한 프로젝트에 적용됩니다.
 CLI 하위 명령은 기존처럼 현재 폴더 또는 `-C`로 지정한 저장소에 적용됩니다.
 
+worktree를 선택하고 상세 패널의 **Open in Codex**를 누르면 해당 폴더를 Codex 데스크톱 앱에서
+엽니다(`codex app <worktree 경로>`). `codex` CLI가 PATH에 있어야 하며, 실행 오류는 상태 표시줄에 나타납니다.
+
 1. 목록에서 worktree를 클릭합니다. `*`는 로컬 변경 사항을 뜻합니다.
 2. **Run**에서 실행 명령을 입력합니다. 예: `pnpm dev --port 3001`.
 3. 포트 행을 선택하고 **Browser**로 엽니다. **Copy URL**도 사용할 수 있습니다.

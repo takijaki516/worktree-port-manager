@@ -14,7 +14,7 @@ import {
 } from "./process-info.ts";
 import { Store, writeJson } from "./store.ts";
 import type { RunSpec } from "./supervisor.ts";
-import { canonical, sleep } from "./system.ts";
+import { canonical, execute, sleep } from "./system.ts";
 import {
   type RunRecord,
   type RunResult,
@@ -270,6 +270,24 @@ export class Manager {
       }
     } catch (error) {
       return `Log unavailable: ${error}`;
+    }
+  }
+
+  async openCodex(tree: Worktree): Promise<void> {
+    if (!(await stat(tree.path).catch(() => null))?.isDirectory()) {
+      throw new WorktreeError("The worktree directory is missing.");
+    }
+    const command = Bun.which("codex", { PATH: process.env.PATH });
+    if (!command) {
+      throw new WorktreeError(
+        "Codex CLI not found. Install it and make 'codex' available on PATH.",
+      );
+    }
+    const result = await execute(command, ["app", tree.path]);
+    if (result.code !== 0) {
+      throw new WorktreeError(
+        `Could not open Codex: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`}`,
+      );
     }
   }
 

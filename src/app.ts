@@ -208,6 +208,8 @@ export class WorktreeApp {
     this.button(second, "copy", "Copy URL", () => this.copy());
     this.button(second, "editor", "Editor", () => this.editor());
     this.button(second, "terminal", "Terminal", () => this.terminal());
+    const third = this.box(this.detailPanel, "actions-3", { height: 3 });
+    this.button(third, "codex", "Open in Codex", () => this.codex());
     this.logPanel = new ScrollBoxRenderable(renderer, {
       id: "logs",
       height: 8,
@@ -420,11 +422,11 @@ export class WorktreeApp {
   private layout(): void {
     const narrow = this.renderer.width < 110;
     this.body.flexDirection = narrow ? "column" : "row";
-    this.body.height = narrow ? 41 : Math.max(18, this.renderer.height - 18);
+    this.body.height = narrow ? 44 : Math.max(21, this.renderer.height - 18);
     this.projectPanel.width = narrow ? "100%" : 28;
     this.projectPanel.height = narrow ? 10 : "100%";
     this.treePanel.height = narrow ? 10 : "100%";
-    this.detailPanel.height = narrow ? 19 : "100%";
+    this.detailPanel.height = narrow ? 22 : "100%";
     this.treePanel.flexBasis = narrow ? undefined : 0;
     this.detailPanel.flexBasis = narrow ? undefined : 0;
     this.summary.visible = !narrow;
@@ -567,6 +569,7 @@ export class WorktreeApp {
       this.enable(`project-choice:${project.commonDir}`, !this.busy);
     for (const id of ["add", "refresh"]) this.enable(id, !this.busy && Boolean(this.service));
     for (const id of ["editor", "terminal"]) this.enable(id, !this.busy && Boolean(ws));
+    this.enable("codex", !this.busy && Boolean(ws && !ws.tree.prunable));
     this.enable(
       "run",
       !this.busy && Boolean(ws && !ws.running && !ws.tree.prunable && !ws.tree.statusError),
@@ -1225,6 +1228,11 @@ export class WorktreeApp {
   editor(): void {
     const tree = this.current?.tree;
     if (tree) void this.perform(() => this.manager.openEditor(tree), "Opened editor");
+  }
+  codex(): void {
+    const tree = this.current?.tree;
+    if (tree && !tree.prunable)
+      void this.perform(() => this.manager.openCodex(tree), `Opened in Codex · ${tree.branch}`);
   }
   terminal(): void {
     const tree = this.current?.tree;
