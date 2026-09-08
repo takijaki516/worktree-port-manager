@@ -248,7 +248,7 @@ test("mouse selects text and panel titles, and copies without activating buttons
     copied.push(text);
     return true;
   };
-  for (const id of ["repo", "tree-panel-title", "details", "logs-title", "log-text", "add-label"]) {
+  for (const id of ["project-panel-title", "details", "add-label"]) {
     await terminal.renderOnce();
     const node = element(id);
     await terminal.mockMouse.drag(node.x, node.y, node.x + 5, node.y);
@@ -277,7 +277,7 @@ test("dragging a worktree label does not change the selected worktree", async ()
   await app.refresh();
   await terminal.renderOnce();
   const node = element(`tree-text:${tree.path}`);
-  await terminal.mockMouse.drag(node.x, node.y, node.x + 7, node.y);
+  await terminal.mockMouse.drag(node.x + 3, node.y, node.x + 10, node.y);
   expect(terminal.renderer.getSelection()?.getSelectedText()).toContain("feature");
   expect(app.current?.tree.branch).toBe("main");
   terminal.renderer.clearSelection();
@@ -285,10 +285,18 @@ test("dragging a worktree label does not change the selected worktree", async ()
   expect(app.current?.tree.branch).toBe("feature/selection");
 });
 
-test("projects remain visible beside worktrees and stack above them in a narrow terminal", async () => {
-  expect(element("project-panel").x).toBeLessThan(element("tree-panel").x);
-  expect(element("project-panel").y).toBe(element("tree-panel").y);
-  expect(element("tree-panel").y).toBe(element("detail-panel").y);
+test("worktrees are nested under their project and the navigator stacks above details when narrow", async () => {
+  expect(terminal.renderer.root.findDescendantById("tree-panel")).toBeUndefined();
+  expect(element("project-panel").x).toBeLessThan(element("detail-panel").x);
+  expect(element("project-panel").y).toBe(element("detail-panel").y);
+  expect(
+    element(`project-group:${context.repo.commonDir}`).findDescendantById(
+      `tree:${context.repo.root}`,
+    ),
+  ).toBe(element(`tree:${context.repo.root}`));
+  expect(element(`tree:${context.repo.root}`).x).toBeGreaterThan(
+    element(`project-choice:${context.repo.commonDir}`).x,
+  );
   expect(terminal.captureCharFrame()).toContain("PROJECTS (1)");
   terminal.mockInput.pressKey("p");
   expect(app.modal).toBeUndefined();
@@ -298,13 +306,49 @@ test("projects remain visible beside worktrees and stack above them in a narrow 
   terminal.resize(80, 24);
   await terminal.renderOnce();
   expect(element("project-panel").y + element("project-panel").height).toBeLessThan(
-    element("tree-panel").y,
-  );
-  expect(element("tree-panel").y + element("tree-panel").height).toBeLessThan(
     element("detail-panel").y,
   );
+  for (const id of [
+    "add",
+    "project-add",
+    "run",
+    "stop",
+    "browser",
+    "copy",
+    "editor",
+    "terminal",
+    "codex",
+  ]) {
+    const button = element(id);
+    expect(button.height).toBe(1);
+    expect(button.x + button.width).toBeLessThanOrEqual(80);
+    expect(button.y + button.height).toBeLessThanOrEqual(element("status").y);
+  }
+  expect(element(`tree:${context.repo.root}`).height).toBe(1);
   await click("project-add");
   expect(app.modal?.kind).toBe("project-add");
+});
+
+test("project groups collapse, expand, and navigate worktrees with arrow keys", async () => {
+  const tree = await context.repo.create({ branch: "nested-child" });
+  await app.refresh();
+  const header = `project-choice:${context.repo.commonDir}`;
+  await click(header);
+  expect(element("project-worktrees").visible).toBe(false);
+  await app.refresh();
+  expect(element("project-worktrees").visible).toBe(false);
+  terminal.mockInput.pressArrow("right");
+  expect(element("project-worktrees").visible).toBe(true);
+  terminal.mockInput.pressArrow("right");
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe(`tree:${context.repo.root}`);
+  terminal.mockInput.pressArrow("down");
+  expect(app.current?.tree.path).toBe(tree.path);
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe(`tree:${tree.path}`);
+  terminal.mockInput.pressArrow("left");
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe(header);
+  terminal.mockInput.pressArrow("left");
+  expect(element("project-worktrees").visible).toBe(false);
+  expect(app.current?.tree.path).toBe(tree.path);
 });
 
 test("projects can be added, switched, and used to create worktrees without stopping servers", async () => {
@@ -316,6 +360,10 @@ test("projects can be added, switched, and used to create worktrees without stop
   await click("submit");
   await idle(() => !app.modal && app.manager.repo.root === otherPath);
   expect(app.projects).toHaveLength(2);
+  expect(terminal.renderer.root.findDescendantById(`tree:${context.repo.root}`)).toBeUndefined();
+  expect(
+    element(`project-group:${app.manager.repo.commonDir}`).findDescendantById(`tree:${otherPath}`),
+  ).toBe(element(`tree:${otherPath}`));
   expect(app.current?.running).toBe(false);
   await click("add");
   fill("branch", "feature/other-project");
@@ -428,7 +476,7 @@ test("an empty app can register its first project and restore it after restart",
   app = new WorktreeApp(undefined, terminal.renderer, projects);
   await app.start();
   await terminal.renderOnce();
-  expect(terminal.captureCharFrame()).toContain("No project selected");
+  expect(terminal.captureCharFrame()).toContain("No projects yet.");
   await click("project-add");
   fill("project-path", context.repo.root);
   await click("submit");
