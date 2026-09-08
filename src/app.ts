@@ -18,14 +18,15 @@ import { sleep } from "./system.ts";
 import { errorMessage, type Workspace } from "./types.ts";
 
 const color = {
-  bg: "#10151d",
-  panel: "#151f2c",
-  raised: "#233145",
-  line: "#35465c",
-  text: "#e3e9f2",
-  muted: "#9bacc2",
-  accent: "#73e2b7",
-  selected: "#254e45",
+  bg: "#282C34",
+  panel: "#23272F",
+  raised: "#343A46",
+  line: "#626C7D",
+  text: "#F0F2F5",
+  muted: "#B6BFCE",
+  accent: "#DCE2EC",
+  selected: "#434C5E",
+  overlay: "#1D2026",
   error: "#ff938f",
 };
 
@@ -680,7 +681,7 @@ export class WorktreeApp {
       width: "100%",
       height: "100%",
       zIndex: 100,
-      backgroundColor: "#080e18",
+      backgroundColor: color.overlay,
     });
     const width = Math.min(72, this.renderer.width - 4);
     const panel = this.panel(overlay, "dialog", ` ${title} `, {
