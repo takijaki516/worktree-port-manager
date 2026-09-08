@@ -492,7 +492,7 @@ export class WorktreeApp {
         row = { box, text };
         this.treeRows.set(ws.tree.path, row);
       }
-      const flags = `${ws.tree.dirty ? " *" : ""}${ws.tree.main ? " [main]" : ""}${ws.tree.locked ? " [locked]" : ""}${ws.tree.prunable ? " [missing]" : ""}`;
+      const flags = `${ws.tree.dirty ? " *" : ""}${ws.tree.main ? " [main]" : ""}${ws.tree.locked ? " [locked]" : ""}${ws.tree.prunable ? " [missing]" : ""}${ws.tree.statusError ? " [Git error]" : ""}`;
       row.text.content = `${ws.tree.branch}${flags}\n${ws.status}  ·  ${[...new Set(ws.ports.map((port) => port.port))].join(", ") || "No ports"}`;
       row.box.backgroundColor = ws.tree.path === this.selected ? color.selected : color.panel;
     }
@@ -519,7 +519,7 @@ export class WorktreeApp {
     if (revision !== this.detailRevision || this.disposed) return;
     this.setPanelTitle(this.detailPanel, ` ${ws.tree.branch} `);
     this.details.content = `${ws.tree.path}\n${ws.status}`;
-    this.command.content = command || "No server command yet";
+    this.command.content = ws.tree.statusError || command || "No server command yet";
     const keys = new Set(ws.ports.map((port) => `${port.pid}:${port.port}`));
     for (const [key, row] of this.portRows) {
       if (!keys.has(key)) {
@@ -567,11 +567,15 @@ export class WorktreeApp {
       this.enable(`project-choice:${project.commonDir}`, !this.busy);
     for (const id of ["add", "refresh"]) this.enable(id, !this.busy && Boolean(this.service));
     for (const id of ["editor", "terminal"]) this.enable(id, !this.busy && Boolean(ws));
-    this.enable("run", !this.busy && Boolean(ws && !ws.running && !ws.tree.prunable));
+    this.enable(
+      "run",
+      !this.busy && Boolean(ws && !ws.running && !ws.tree.prunable && !ws.tree.statusError),
+    );
     this.enable("stop", !this.busy && Boolean(ws?.running));
     this.enable(
       "remove",
-      !this.busy && Boolean(ws && !ws.tree.main && !ws.tree.locked && !ws.running),
+      !this.busy &&
+        Boolean(ws && !ws.tree.main && !ws.tree.locked && !ws.running && !ws.tree.statusError),
     );
     this.enable("browser", !this.busy && Boolean(ws?.ports.length));
     this.enable("copy", !this.busy && Boolean(ws?.ports.length));

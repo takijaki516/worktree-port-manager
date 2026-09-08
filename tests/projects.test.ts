@@ -28,6 +28,26 @@ test("projects persist and linked worktrees register only once", async () => {
   ]);
 });
 
+test("a stale linked worktree gitdir does not block project registration or snapshots", async () => {
+  const tree = await context.repo.create({ branch: "stale-link" });
+  await writeFile(
+    join(tree.path, ".git"),
+    `gitdir: ${context.directory}/old-location/.git/worktrees/stale-link\n`,
+  );
+  const snapshot = await context.manager.snapshot();
+  expect(snapshot.worktrees).toHaveLength(2);
+  expect(snapshot.warning).toContain("not a git repository");
+  const broken = snapshot.worktrees.find((ws) => ws.tree.path === tree.path);
+  expect(broken?.status).toBe("Git error");
+  const projects = new Projects(context.repo.worktreeDirectory);
+  expect(await projects.add(context.repo)).toHaveLength(1);
+  await expect(context.manager.start(tree, "echo test")).rejects.toThrow("not a git repository");
+  await expect(context.repo.remove(tree)).rejects.toThrow("not a git repository");
+  await context.repo.git(["worktree", "repair", tree.path]);
+  const repaired = await context.manager.snapshot();
+  expect(repaired.worktrees.find((ws) => ws.tree.path === tree.path)?.status).toBe("Idle");
+});
+
 test("concurrent registrations retain same-named repositories as separate projects", async () => {
   const path = join(context.directory, "other", "repo with spaces");
   await context.repo.git(["clone", "--", context.repo.root, path]);

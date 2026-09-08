@@ -117,12 +117,17 @@ export class Manager {
             : ws.run
               ? "Stopped"
               : "Idle";
+      if (ws.tree.statusError) {
+        if (!ws.running) ws.status = "Git error";
+        warning = [warning, `${ws.tree.path}: ${ws.tree.statusError}`].filter(Boolean).join("\n");
+      }
     }
     return { worktrees, warning };
   }
 
   async start(target: Worktree, command: string, port?: number): Promise<RunRecord> {
     const tree = await this.repo.find(target.path);
+    if (tree.statusError) throw new WorktreeError(tree.statusError);
     if (!command.trim())
       throw new WorktreeError("Enter a server command, for example: npm run dev");
     if (tree.prunable || !(await stat(tree.path).catch(() => null))?.isDirectory()) {

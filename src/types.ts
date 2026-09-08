@@ -8,6 +8,7 @@ export interface Worktree {
   locked: boolean;
   prunable: boolean;
   dirty: boolean;
+  statusError?: string;
 }
 
 // Existing Python state files keep their field names and remain readable.

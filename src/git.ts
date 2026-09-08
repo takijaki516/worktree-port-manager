@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { canonical, execute, isMissing } from "./system.ts";
-import { type Worktree, WorktreeError } from "./types.ts";
+import { errorMessage, type Worktree, WorktreeError } from "./types.ts";
 
 export function parseWorktrees(raw: string): Worktree[] {
   const trees: Worktree[] = [];
@@ -105,9 +105,17 @@ export class Repository {
       trees.map(async (tree) => {
         tree.path = await canonical(tree.path);
         if (!tree.prunable && (await stat(tree.path).catch(() => null))?.isDirectory()) {
-          tree.dirty = Boolean(
-            await this.git(["status", "--porcelain", "-z", "--untracked-files=normal"], tree.path),
-          );
+          try {
+            tree.dirty = Boolean(
+              await this.git(
+                ["status", "--porcelain", "-z", "--untracked-files=normal"],
+                tree.path,
+              ),
+            );
+          } catch (error) {
+            if (tree.main) throw error;
+            tree.statusError = errorMessage(error);
+          }
         }
         return tree;
       }),
@@ -200,6 +208,7 @@ export class Repository {
   async remove(target: Worktree): Promise<void> {
     const tree = await this.find(target.path);
     if (tree.main) throw new WorktreeError("The main worktree cannot be removed.");
+    if (tree.statusError) throw new WorktreeError(tree.statusError);
     if (tree.locked) throw new WorktreeError("This worktree is locked. Unlock it with Git first.");
     if (tree.dirty)
       throw new WorktreeError("This worktree has local changes. Commit or stash them first.");
