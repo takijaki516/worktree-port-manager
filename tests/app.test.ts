@@ -319,6 +319,76 @@ test("projects can be added, switched, and used to create worktrees without stop
   expect(await new Projects(context.repo.worktreeDirectory).list()).toHaveLength(2);
 });
 
+test("folder selection fills the path and requires explicit project submission", async () => {
+  app.dispose();
+  terminal.renderer.destroy();
+  terminal = await createTestRenderer({ width: 120, height: 38 });
+  let resolvePicker!: (path: string | undefined) => void;
+  let calls = 0;
+  app = new WorktreeApp(context.manager, terminal.renderer, undefined, () => {
+    calls++;
+    return new Promise((resolve) => {
+      resolvePicker = resolve;
+    });
+  });
+  await app.start();
+  await click("project-add");
+  fill("project-path", "previous path");
+  await click("project-browse");
+  await click("project-browse");
+  await click("submit");
+  expect(calls).toBe(1);
+  expect(app.modal?.kind).toBe("project-add");
+  resolvePicker(context.repo.root);
+  await eventually(() => (element("project-path") as InputRenderable).value === context.repo.root);
+  expect(app.modal?.kind).toBe("project-add");
+  expect(terminal.renderer.currentFocusedRenderable?.id).toBe("project-path");
+  await click("submit");
+  await idle(() => !app.modal);
+});
+
+test("folder picker cancellation and errors preserve input; late results do not change a new dialog", async () => {
+  app.dispose();
+  terminal.renderer.destroy();
+  terminal = await createTestRenderer({ width: 120, height: 38 });
+  let resolvePicker!: (path: string | undefined) => void;
+  let rejectPicker!: (error: Error) => void;
+  app = new WorktreeApp(
+    context.manager,
+    terminal.renderer,
+    undefined,
+    () =>
+      new Promise((resolve, reject) => {
+        resolvePicker = resolve;
+        rejectPicker = reject;
+      }),
+  );
+  await app.start();
+  await click("project-add");
+  fill("project-path", "keep this path");
+  await click("project-browse");
+  resolvePicker(undefined);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await eventually(() => terminal.renderer.currentFocusedRenderable?.id === "project-path");
+  expect((element("project-path") as InputRenderable).value).toBe("keep this path");
+  element("project-browse").focus();
+  await terminal.mockInput.pressKey("RETURN");
+  rejectPicker(new Error("Picker unavailable"));
+  await eventually(async () => {
+    await terminal.renderOnce();
+    return terminal.captureCharFrame().includes("Picker unavailable");
+  });
+  expect((element("project-path") as InputRenderable).value).toBe("keep this path");
+  element("project-browse").focus();
+  await terminal.mockInput.pressKey("RETURN");
+  await click("cancel");
+  await click("project-add");
+  fill("project-path", "new dialog path");
+  resolvePicker(context.repo.root);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect((element("project-path") as InputRenderable).value).toBe("new dialog path");
+});
+
 test("invalid project paths keep the active project and show an error", async () => {
   await click("project-add");
   fill("project-path", context.directory);

@@ -9,6 +9,7 @@ import {
   ScrollBoxRenderable,
   TextRenderable,
 } from "@opentui/core";
+import { chooseFolder } from "./folder-picker.ts";
 import { type BranchRef, Repository } from "./git.ts";
 import { Manager } from "./manager.ts";
 import { portUrl } from "./process-info.ts";
@@ -87,6 +88,9 @@ export class WorktreeApp {
     manager: Manager | undefined,
     readonly renderer: CliRenderer,
     registry = new Projects(manager?.repo.worktreeDirectory),
+    private readonly pickProjectFolder:
+      | (() => Promise<string | undefined>)
+      | undefined = process.platform === "darwin" ? chooseFolder : undefined,
   ) {
     this.service = manager;
     this.registry = registry;
@@ -703,8 +707,15 @@ export class WorktreeApp {
     return dialog;
   }
 
-  private field(dialog: Dialog, id: string, label: string, value = "", placeholder = "") {
-    this.text(dialog.panel, `${id}-label`, label, { height: 1, fg: color.muted });
+  private field(
+    dialog: Dialog,
+    id: string,
+    label: string,
+    value = "",
+    placeholder = "",
+    parent = dialog.panel,
+  ) {
+    this.text(parent, `${id}-label`, label, { height: 1, fg: color.muted });
     const input = new InputRenderable(this.renderer, {
       id,
       value,
@@ -715,7 +726,7 @@ export class WorktreeApp {
       focusedBackgroundColor: color.selected,
       textColor: color.text,
     });
-    dialog.panel.add(input);
+    parent.add(input);
     dialog.fields.set(id, input);
     dialog.focus.push(input);
     input.on(InputRenderableEvents.ENTER, () => dialog.submit());
@@ -737,7 +748,7 @@ export class WorktreeApp {
   closeModal(): void {
     this.modal?.overlay.destroyRecursively();
     this.modal = undefined;
-    for (const id of ["cancel", "submit", "existing"]) this.buttons.delete(id);
+    for (const id of ["cancel", "submit", "existing", "project-browse"]) this.buttons.delete(id);
     this.treeList.focus();
   }
 
@@ -792,13 +803,60 @@ export class WorktreeApp {
   openProjectAdd(): void {
     if (this.busy || this.modal) return;
     const dialog = this.createDialog("project-add", "Add project", 12);
+    const row = this.box(dialog.panel, "project-path-row", {
+      height: 3,
+      flexDirection: "row",
+      gap: 1,
+    });
+    const pathColumn = this.box(row, "project-path-column", {
+      flexGrow: 1,
+      flexBasis: 0,
+      minWidth: 0,
+      flexDirection: "column",
+    });
     const path = this.field(
       dialog,
       "project-path",
       "Local Git repository path",
       "",
       "~/code/my-project",
+      pathColumn,
     );
+    let picking = false;
+    const pickFolder = this.pickProjectFolder;
+    if (pickFolder) {
+      this.button(
+        row,
+        "project-browse",
+        "Choose folder…",
+        () => {
+          if (picking) return;
+          picking = true;
+          dialog.error.content = "";
+          this.enable("project-browse", false);
+          this.enable("submit", false);
+          void pickFolder()
+            .then((selected) => {
+              if (this.disposed || this.modal !== dialog) return;
+              if (selected !== undefined) path.value = selected;
+            })
+            .catch((error) => {
+              if (!this.disposed && this.modal === dialog)
+                dialog.error.content = errorMessage(error);
+            })
+            .finally(() => {
+              picking = false;
+              if (this.disposed || this.modal !== dialog) return;
+              this.enable("project-browse", true);
+              this.enable("submit", true);
+              path.focus();
+            });
+        },
+        false,
+        18,
+        dialog,
+      );
+    }
     this.text(
       dialog.panel,
       "project-hint",
@@ -806,6 +864,7 @@ export class WorktreeApp {
       { height: 2, fg: color.muted },
     );
     dialog.submit = () => {
+      if (picking) return;
       if (!path.value.trim()) {
         dialog.error.content = "Enter a repository path.";
         return;
