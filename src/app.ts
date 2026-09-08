@@ -39,6 +39,9 @@ class TooltipText extends TextRenderable {
   override render(buffer: OptimizedBuffer): void {
     if (!this.visible) return;
     this.markClean();
+    const left = Math.max(0, this.x - 1);
+    const right = Math.min(buffer.width, this.x + this.width + 1);
+    buffer.fillRect(left, this.y, right - left, this.height, this.bg);
     this.renderSelf(buffer);
   }
 }
@@ -516,7 +519,7 @@ export class WorktreeApp {
       const value = content();
       const fullWidth = Bun.stringWidth(value);
       const left = Math.max(0, Math.min(text.x, this.renderer.width - 1));
-      const width = Math.min(fullWidth, this.renderer.width - left);
+      const width = Math.min(fullWidth, Math.max(1, this.renderer.width - left - 1));
       this.projectTooltip.content = value;
       this.projectTooltip.width = width;
       this.projectTooltip.left = left;

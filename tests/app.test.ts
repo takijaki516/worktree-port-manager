@@ -180,7 +180,7 @@ test("hover text wraps wide Unicode labels within the terminal", async () => {
   expect(tooltip.visible).toBe(true);
   expect(tooltip.plainText).toBe(label.plainText);
   expect(tooltip.x).toBe(label.x);
-  expect(tooltip.width).toBe(120 - label.x);
+  expect(tooltip.width).toBe(120 - label.x - 1);
   expect(tooltip.height).toBeGreaterThan(1);
   expect(tooltip.y + tooltip.height).toBeLessThanOrEqual(38);
 });
