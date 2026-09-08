@@ -341,8 +341,8 @@ test("worktrees are nested under their project and the navigator stacks above de
     element("detail-panel").y,
   );
   for (const id of [
-    "add",
     "project-add",
+    "add",
     "run",
     "stop",
     "browser",
@@ -354,9 +354,13 @@ test("worktrees are nested under their project and the navigator stacks above de
     const button = element(id);
     expect(button.height).toBe(1);
     expect(button.x + button.width).toBeLessThanOrEqual(80);
-    expect(button.y + button.height).toBeLessThanOrEqual(element("status").y);
+    expect(button.y + button.height).toBeLessThanOrEqual(terminal.renderer.height);
   }
+  expect(element("status").visible).toBe(false);
+  expect(element("toolbar").y + element("toolbar").height).toBe(terminal.renderer.height);
   expect(element(`tree:${context.repo.root}`).height).toBe(1);
+  expect(element("project-panel").findDescendantById("project-add")).toBeUndefined();
+  expect(element("toolbar").findDescendantById("project-add")).toBe(element("project-add"));
   await click("project-add");
   expect(app.modal?.kind).toBe("project-add");
 });
@@ -521,4 +525,58 @@ test("an empty app can register its first project and restore it after restart",
   await app.start();
   expect(app.manager.repo.commonDir).toBe(context.repo.commonDir);
   expect(app.projects).toHaveLength(1);
+});
+
+test("toast progress persists, then success expires without moving the toolbar", async () => {
+  const toolbarY = element("toolbar").y;
+  let finish!: () => void;
+  const pending = app.perform(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    "Done",
+    "Creating worktree…",
+  );
+  await terminal.renderOnce();
+  const toast = element("toast");
+  expect(toast.visible).toBe(true);
+  expect(toast.y).toBe(0);
+  expect(toast.x + toast.width).toBe(terminal.renderer.width);
+  expect(terminal.captureCharFrame()).toContain("Creating worktree…");
+  await Bun.sleep(3100);
+  expect(toast.visible).toBe(true);
+  finish();
+  await pending;
+  await terminal.renderOnce();
+  expect(terminal.captureCharFrame()).toContain("✓ Done");
+  await app.refresh();
+  expect(toast.visible).toBe(true);
+  expect(element("toolbar").y).toBe(toolbarY);
+  await eventually(() => !toast.visible, 4000);
+  await terminal.renderOnce();
+  expect(element("toolbar").y).toBe(toolbarY);
+});
+
+test("error toast survives refresh and time; Escape closes dialogs before the toast", async () => {
+  await app.perform(async () => {
+    throw new Error("Example failure");
+  }, "Done");
+  await Bun.sleep(3100);
+  await app.refresh();
+  await terminal.renderOnce();
+  expect(element("toast").visible).toBe(true);
+  expect(terminal.captureCharFrame()).toContain("Example failure");
+  expect(terminal.captureCharFrame()).toContain("Esc Close");
+  await app.perform(async () => {}, "Another success");
+  await terminal.renderOnce();
+  expect(terminal.captureCharFrame()).toContain("Example failure");
+  app.openProjectAdd();
+  terminal.mockInput.pressEscape();
+  await eventually(() => !app.modal);
+  expect(app.modal).toBeUndefined();
+  expect(element("toast").visible).toBe(true);
+  terminal.mockInput.pressEscape();
+  await eventually(() => !element("toast").visible);
+  expect(element("toast").visible).toBe(false);
 });

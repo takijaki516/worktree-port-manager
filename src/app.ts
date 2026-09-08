@@ -74,6 +74,10 @@ export class WorktreeApp {
   private command: TextRenderable;
   private summary: TextRenderable;
   private status: TextRenderable;
+  private toast: BoxRenderable;
+  private toastKind?: "success" | "progress" | "error";
+  private toastTimer?: ReturnType<typeof setTimeout>;
+  private lastWarning?: string;
   private buttons = new Map<string, Button>();
   private treeRows = new Map<string, { box: BoxRenderable; text: TextRenderable }>();
   private portRows = new Map<string, { box: BoxRenderable; text: TextRenderable }>();
@@ -112,13 +116,6 @@ export class WorktreeApp {
       flexGrow: 1,
       flexBasis: 0,
     });
-    this.button(
-      this.projectPanel,
-      "project-add",
-      "+ Add project",
-      () => this.openProjectAdd(),
-      false,
-    );
     this.projectList = new ScrollBoxRenderable(renderer, {
       id: "project-list",
       flexGrow: 1,
@@ -188,7 +185,8 @@ export class WorktreeApp {
       gap: 1,
       paddingX: 1,
     });
-    this.button(toolbar, "add", "n New worktree", () => this.openAdd(), true);
+    this.button(toolbar, "project-add", "+ Add project", () => this.openProjectAdd());
+    this.button(toolbar, "add", "n New worktree", () => this.openAdd());
     this.button(toolbar, "remove", "d Remove", () => this.openRemove());
     this.button(toolbar, "refresh", "F5 Refresh", () => {
       void this.refresh();
@@ -203,10 +201,22 @@ export class WorktreeApp {
       truncate: true,
       fg: color.muted,
     });
-    this.status = this.text(this.root, "status", "Loading repository…", {
-      height: 1,
+    this.toast = this.box(this.root, "toast", {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      width: Math.min(56, renderer.width),
+      zIndex: 90,
+      border: true,
+      borderStyle: "rounded",
+      borderColor: color.line,
+      backgroundColor: color.raised,
       paddingX: 1,
-      fg: color.muted,
+      visible: false,
+    });
+    this.status = this.text(this.toast, "status", "", {
+      wrapMode: "word",
+      visible: false,
     });
     renderer.keyInput.on("keypress", this.keyHandler);
     renderer.on("resize", this.resizeHandler);
@@ -259,6 +269,7 @@ export class WorktreeApp {
     if (this.disposed) return;
     this.disposed = true;
     clearInterval(this.timer);
+    clearTimeout(this.toastTimer);
     this.renderer.keyInput.off("keypress", this.keyHandler);
     this.renderer.off("resize", this.resizeHandler);
   }
@@ -398,10 +409,11 @@ export class WorktreeApp {
     const narrow = this.renderer.width < 95;
     this.body.flexDirection = narrow ? "column" : "row";
     const detailHeight = Math.max(9, this.portList.height + 8);
-    const projectHeight = Math.max(6, this.renderer.height - 3 - detailHeight);
+    this.toast.width = Math.min(56, this.renderer.width);
+    const projectHeight = Math.max(6, this.renderer.height - 2 - detailHeight);
     this.body.height = Math.max(
       narrow ? projectHeight + detailHeight + 1 : 10,
-      this.renderer.height - 2,
+      this.renderer.height - 1,
     );
     this.projectPanel.height = narrow ? projectHeight : "100%";
     this.detailPanel.height = narrow ? detailHeight : "100%";
@@ -417,6 +429,34 @@ export class WorktreeApp {
     }
   }
 
+  private dismissToast(): void {
+    clearTimeout(this.toastTimer);
+    this.toastKind = undefined;
+    this.toast.visible = false;
+    this.status.visible = false;
+  }
+
+  private setStatus(message: string, kind: "success" | "progress" | "error" = "success"): void {
+    if (this.disposed || !message || (this.toastKind === "error" && kind !== "error")) return;
+    clearTimeout(this.toastTimer);
+    this.toastKind = kind;
+    const prefix = kind === "error" ? "!" : kind === "progress" ? "…" : "✓";
+    this.status.content = `${prefix} ${message}${kind === "error" ? "\nEsc Close" : ""}`;
+    this.status.fg = kind === "error" ? color.error : color.text;
+    this.toast.borderColor = kind === "error" ? color.error : color.line;
+    this.toast.visible = true;
+    this.status.visible = true;
+    if (kind === "success") {
+      this.toastTimer = setTimeout(() => this.dismissToast(), 3000);
+      this.toastTimer.unref();
+    }
+  }
+
+  private showWarning(warning?: string): void {
+    if (warning && warning !== this.lastWarning) this.setStatus(warning, "error");
+    this.lastWarning = warning;
+  }
+
   async refresh(force = false): Promise<void> {
     if (this.refreshing || (this.busy && !force) || this.modal || this.disposed) return;
     this.refreshing = true;
@@ -424,7 +464,7 @@ export class WorktreeApp {
     try {
       if (!service) {
         this.summary.content = "No project selected";
-        this.status.content = "Click + Add project to register a local Git repository.";
+
         this.updateButtons();
         return;
       }
@@ -439,7 +479,7 @@ export class WorktreeApp {
       const ports = new Set(this.workspaces.flatMap((ws) => ws.ports.map((port) => port.port)))
         .size;
       this.summary.content = `${this.workspaces.length} trees · ${running} running · ${ports} ports`;
-      this.status.content = snapshot.warning || "";
+      this.showWarning(snapshot.warning);
     } catch (error) {
       this.report(error);
     } finally {
@@ -581,9 +621,11 @@ export class WorktreeApp {
       if (text) {
         key.preventDefault();
         key.stopPropagation();
-        this.status.content = this.renderer.copyToClipboardOSC52(text)
-          ? "Selected text copied"
-          : "Clipboard unavailable";
+        const copied = this.renderer.copyToClipboardOSC52(text);
+        this.setStatus(
+          copied ? "Selected text copied" : "Clipboard unavailable",
+          copied ? "success" : "error",
+        );
         return;
       }
     }
@@ -604,6 +646,11 @@ export class WorktreeApp {
         if (this.modal.closeDropdown?.()) return;
         this.closeModal();
       }
+      return;
+    }
+    if (key.name === "escape" && this.toastKind === "error") {
+      key.preventDefault();
+      this.dismissToast();
       return;
     }
     if (this.busy) return;
@@ -741,7 +788,7 @@ export class WorktreeApp {
     if (this.busy || this.modal) return;
     this.content.scrollChildIntoView(this.body.id);
     const active = this.buttons.get(`project-choice:${this.service?.repo.commonDir}`);
-    (active?.box ?? this.buttons.get("project-add")?.box)?.focus();
+    (active?.box ?? this.projectList).focus();
   }
 
   private renderProjects(): void {
@@ -963,8 +1010,8 @@ export class WorktreeApp {
       this.renderTrees();
       await this.updateDetails();
       this.summary.content = `${this.workspaces.length} trees`;
-      this.status.content =
-        snapshot.warning || "Project switched · Other projects' servers keep running";
+      this.setStatus("Project switched · Other projects' servers keep running");
+      this.showWarning(snapshot.warning);
     } catch (error) {
       if (dialog && this.modal === dialog) dialog.error.content = errorMessage(error);
       else this.report(error);
@@ -1173,11 +1220,15 @@ export class WorktreeApp {
         existing,
       };
       this.closeModal();
-      void this.perform(async () => {
-        const tree = await this.manager.repo.create(options);
-        this.selected = tree.path;
-        this.setProjectExpanded(true);
-      }, "Worktree created");
+      void this.perform(
+        async () => {
+          const tree = await this.manager.repo.create(options);
+          this.selected = tree.path;
+          this.setProjectExpanded(true);
+        },
+        "Worktree created",
+        "Creating worktree…",
+      );
     };
     this.dialogActions(dialog, "Create worktree");
   }
@@ -1226,7 +1277,11 @@ export class WorktreeApp {
         }
         const value = command.value.trim();
         this.closeModal();
-        void this.perform(() => this.manager.start(ws.tree, value, selectedPort), "Server started");
+        void this.perform(
+          () => this.manager.start(ws.tree, value, selectedPort),
+          "Server started",
+          "Starting server…",
+        );
       };
       this.dialogActions(dialog, "Run server");
     } catch (error) {
@@ -1246,16 +1301,24 @@ export class WorktreeApp {
     );
     dialog.submit = () => {
       this.closeModal();
-      void this.perform(() => this.manager.remove(ws.tree), "Worktree removed; branch kept");
+      void this.perform(
+        () => this.manager.remove(ws.tree),
+        "Worktree removed; branch kept",
+        "Removing worktree…",
+      );
     };
     this.dialogActions(dialog, "Remove worktree");
   }
 
-  async perform(operation: () => Promise<unknown>, message: string): Promise<void> {
+  async perform(
+    operation: () => Promise<unknown>,
+    message: string,
+    progress = "Working…",
+  ): Promise<void> {
     if (this.busy || this.disposed) return;
     this.busy = true;
     this.updateButtons();
-    this.status.content = "Working…";
+    this.setStatus(progress, "progress");
     let failure: unknown;
     try {
       await operation();
@@ -1268,14 +1331,15 @@ export class WorktreeApp {
         this.busy = false;
         this.updateButtons();
         if (failure) this.report(failure);
-        else this.status.content = message;
+        else this.setStatus(message);
       }
     }
   }
 
   stop(): void {
     const ws = this.current;
-    if (ws?.running) void this.perform(() => this.manager.stop(ws.tree), "Server stopped");
+    if (ws?.running)
+      void this.perform(() => this.manager.stop(ws.tree), "Server stopped", "Stopping server…");
   }
   private chosenUrl(): string | undefined {
     const ws = this.current;
@@ -1288,10 +1352,13 @@ export class WorktreeApp {
   }
   copy(): void {
     const url = this.chosenUrl();
-    if (url)
-      this.status.content = this.renderer.copyToClipboardOSC52(url)
-        ? `Copied ${url}`
-        : `Clipboard unavailable · ${url}`;
+    if (url) {
+      const copied = this.renderer.copyToClipboardOSC52(url);
+      this.setStatus(
+        copied ? `Copied ${url}` : `Clipboard unavailable · ${url}`,
+        copied ? "success" : "error",
+      );
+    }
   }
   editor(): void {
     const tree = this.current?.tree;
@@ -1314,8 +1381,7 @@ export class WorktreeApp {
   }
   private report(error: unknown): void {
     if (!this.disposed) {
-      this.status.content = errorMessage(error);
-      this.status.fg = color.error;
+      this.setStatus(errorMessage(error), "error");
     }
   }
 }
